@@ -36,6 +36,11 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# IDE settings
+.idea/
+.idea 2/
+.DS_Store 2
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
