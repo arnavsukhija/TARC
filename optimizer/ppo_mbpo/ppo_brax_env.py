@@ -1,18 +1,16 @@
-import functools
 import math
 import time
 from functools import partial
-from typing import Any, Tuple, Sequence, Callable, Mapping, Union, Optional
+from typing import Any, Tuple, Sequence, Callable
 
 import chex
 import flax.linen as nn
-import jax
 import jax.numpy as jnp
 import jax.random as jr
 import jax.tree_util as jtu
 import optax
 import wandb
-from brax import envs, base
+from brax import envs
 from brax.training import acting
 from brax.training import networks
 from brax.training import types
@@ -22,11 +20,11 @@ from brax.training.types import Params
 from jax.lax import scan
 from jaxtyping import PyTree
 
-from mujoco_playground._src.wrapper import wrap_for_brax_training as wrap_for_training
+from brax.envs.wrappers.training import wrap as wrap_for_training
 
-from optimizer.ppo.losses_new import PPOLoss, PPONetworkParams
-from optimizer.ppo.ppo_network import PPONetworksModel, make_inference_fn
-from optimizer.ppo_mbpo.utils import gradient_update_fn, metrics_to_float
+from optimizer.ppo_mbpo.losses_new import PPOLoss, PPONetworkParams
+from optimizer.ppo_mbpo.ppo_network import PPONetworksModel, make_inference_fn
+from optimizer.ppo.utils import gradient_update_fn, metrics_to_float
 
 Metrics = types.Metrics
 Transition = types.Transition
@@ -47,46 +45,11 @@ class TrainingState:
         return self.normalizer_params, self.params.policy
 
 
-def _maybe_wrap_env(
-        env: envs.Env,
-        wrap_env: bool,
-        num_envs: int,
-        episode_length: Optional[int],
-        action_repeat: int,
-        local_device_count: int,
-        key_env: jr.PRNGKey,
-        randomization_fn: Optional[
-            Callable[[base.System, jnp.ndarray], Tuple[base.System, base.System]]
-        ] = None,
-):
-    """Wraps the environment for training/eval if wrap_env is True."""
-    if not wrap_env:
-        return env
-    if episode_length is None:
-        raise ValueError('episode_length must be specified')
-    v_randomization_fn = None
-    if randomization_fn is not None:
-        randomization_batch_size = num_envs // local_device_count
-        # all devices gets the same randomization rng
-        randomization_rng = jax.random.split(key_env, randomization_batch_size)
-        v_randomization_fn = functools.partial(
-            randomization_fn, rng=randomization_rng
-        )
-    env = wrap_for_training(
-        env,
-        episode_length=episode_length,
-        action_repeat=action_repeat,
-        randomization_fn=v_randomization_fn,
-    )  # pytype: disable=wrong-keyword-args
-    return env
-
-
 class PPO:
     def __init__(self,
                  environment: envs.Env,
                  num_timesteps: int,
                  episode_length: int,
-                 eval_environment: envs.Env = None,
                  action_repeat: int = 1,
                  num_envs: int = 1,
                  num_eval_envs: int = 128,
@@ -102,7 +65,6 @@ class PPO:
                  num_updates_per_batch: int = 2,
                  num_evals: int = 1,
                  normalize_observations: bool = False,
-                 non_equidistant_time: bool = False,
                  reward_scaling: float = 1.,
                  clipping_epsilon: float = .3,
                  gae_lambda: float = .95,
@@ -114,14 +76,11 @@ class PPO:
                  critic_activation: networks.ActivationFn = nn.swish,
                  wandb_logging: bool = False,
                  return_best_model: bool = False,
+                 non_equidistant_time: bool = False,
                  continuous_discounting: float = 0,
                  min_time_between_switches: float = 0,
                  max_time_between_switches: float = 0,
-                 policy_obs_key: str = 'state',
-                 value_obs_key: str = 'state',
-                 randomization_fn: Optional[
-                     Callable[[base.System, jnp.ndarray], Tuple[base.System, base.System]]
-                 ] = None
+                 env_dt: float = 0,
                  ):
         self.wandb_logging = wandb_logging
         self.return_best_model = return_best_model
@@ -143,8 +102,6 @@ class PPO:
         self.entropy_cost = entropy_cost
         self.num_eval_envs = num_eval_envs
         self.num_envs = num_envs
-        self.non_equidistant_time = non_equidistant_time
-        self.randomization_fn = randomization_fn
         # Set this to None unless you want to use parallelism across multiple devices.
         self._PMAP_AXIS_NAME = None
 
@@ -156,17 +113,8 @@ class PPO:
             num_timesteps / (num_evals_after_init * self.env_step_per_training_step))
         self.num_training_steps_per_epoch = num_training_steps_per_epoch
         self.key = jr.PRNGKey(seed)
-        self.key, key_dr = jr.split(self.key)
-        self.env = _maybe_wrap_env(environment, wrap_env=True,
-                                   num_envs=self.num_envs, episode_length=self.episode_length,
-                                   action_repeat=self.action_repeat, local_device_count=jax.local_device_count(),
-                                   key_env=key_dr, randomization_fn=randomization_fn)
-        # Only one local device for evaluation
-        key_dr, key_dreval = jr.split(key_dr)
-        self.eval_env = _maybe_wrap_env(eval_environment if eval_environment is not None else environment,
-                                        wrap_env=True, num_envs=self.num_eval_envs, episode_length=self.episode_length,
-                                        action_repeat=self.action_repeat,
-                                        local_device_count=1, key_env=key_dreval, randomization_fn=randomization_fn)
+        self.env = wrap_for_training(environment, episode_length=episode_length, action_repeat=action_repeat)
+
         self.x_dim = self.env.observation_size
         self.u_dim = self.env.action_size
 
@@ -183,9 +131,7 @@ class PPO:
             policy_hidden_layer_sizes=policy_hidden_layer_sizes,
             policy_activation=policy_activation,
             value_hidden_layer_sizes=critic_hidden_layer_sizes,
-            value_activation=critic_activation,
-            policy_obs_key=policy_obs_key,
-            value_obs_key=value_obs_key, )
+            value_activation=critic_activation)
 
         self.make_policy = make_inference_fn(self.ppo_networks_model.get_ppo_networks())
 
@@ -201,10 +147,11 @@ class PPO:
                                 gae_lambda=self.gae_lambda,
                                 clipping_epsilon=self.clipping_epsilon,
                                 normalize_advantage=self.normalize_advantage,
+                                non_equidistant_time=non_equidistant_time,
                                 continuous_discounting=continuous_discounting,
                                 min_time_between_switches=min_time_between_switches,
                                 max_time_between_switches=max_time_between_switches,
-                                non_equidistant_time=self.non_equidistant_time,
+                                env_dt=env_dt,
                                 )
 
         self.ppo_update = gradient_update_fn(self.ppo_loss.loss, self.optimizer, pmap_axis_name=self._PMAP_AXIS_NAME,
@@ -339,32 +286,26 @@ class PPO:
         init_params = PPONetworkParams(
             policy=self.ppo_networks_model.get_policy_network().init(keys[0]),
             value=self.ppo_networks_model.get_value_network().init(keys[1]))
-        # get tbe observatiion spec for the state and privileged state
-        obs_spec = {
-            k: specs.Array(shape, jnp.float32)
-            for k, shape in self.x_dim.items()
-            if not k.startswith("pixels/")
-        }
         training_state = TrainingState(
             optimizer_state=self.optimizer.init(init_params),
             params=init_params,
-            normalizer_params=running_statistics.init_state(obs_spec),
-            env_steps=0,
-        )
+            normalizer_params=running_statistics.init_state(
+                specs.Array((self.x_dim,), jnp.float32)),
+            env_steps=0)
         return training_state
 
     def run_training(self, key: chex.PRNGKey, progress_fn: Callable[[int, Metrics], None] = lambda *args: None):
         key, subkey = jr.split(key)
         training_state = self.init_training_state(subkey)
+
         key, rb_key, env_key, eval_key = jr.split(key, 4)
 
         # Initialize initial env state
         env_keys = jr.split(env_key, self.num_envs)
         env_state = self.env.reset(env_keys)
 
-        # we use a separate evaluation env here
         evaluator = acting.Evaluator(
-            self.eval_env, partial(self.make_policy, deterministic=self.deterministic_eval),
+            self.env, partial(self.make_policy, deterministic=self.deterministic_eval),
             num_eval_envs=self.num_eval_envs, episode_length=self.episode_length, action_repeat=self.action_repeat,
             key=eval_key)
 

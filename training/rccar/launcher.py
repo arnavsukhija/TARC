@@ -1,5 +1,13 @@
+import os
+# Temporarily set JAX to use CPU during launcher initialization on the login node 
+# to prevent CUDA_ERROR_NO_DEVICE crashes.
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import exp
 from training.euler_util import generate_run_commands, generate_base_command, dict_permutations, available_gpus
+
+# Remove the CPU override so that the Slurm jobs inherit the default behavior and use the GPU!
+os.environ.pop("JAX_PLATFORMS", None)
 
 ################################################
 #################### RC Car ####################
@@ -32,7 +40,7 @@ rccar_switch_cost = {'env_name': ['rccar', ],
 
 rccar_no_switch_cost_ppo = {'env_name': ['rccar', ],
                      'backend': ['generalized', ],
-                     'project_name': ["PPO_RCCar"],
+                     'project_name': ["PPO_RCCar_lowFrequency"],
                      'num_timesteps': [75_000_000, ], #from normal ppo training
                      'episode_steps': [200, ],
                      'base_discount_factor': [0.9],
@@ -48,18 +56,19 @@ rccar_no_switch_cost_ppo = {'env_name': ['rccar', ],
                      'reward_scaling': [1.0, ],
                      'switch_cost': [0.1, ],
                      'max_time_repeat': [10],
-                     'time_as_part_of_state': [1, ],
+                     'time_as_part_of_state': [0, ],
                      'num_final_evals': [10, ],
                     'switch_cost_wrapper': [0, ], # normal PPO (without switch cost wrapping)
-                    'domain_randomization': [0,],
-                    'sample_init_pos': [0,],
-                    'action_delay': [2.0]
+                    'domain_randomization': [1,],
+                    'sample_init_pos': [1,],
+                    'action_delay': [2.0],
+                    'base_dt_divisor': [2]
                      }
 
 
 def main():
     command_list = []
-    flags_combinations = dict_permutations(rccar_switch_cost)
+    flags_combinations = dict_permutations(rccar_no_switch_cost_ppo)
     for flags in flags_combinations:
         cmd = generate_base_command(exp, flags=flags)
         command_list.append(cmd)

@@ -12,7 +12,7 @@ required = [
     'mujoco',
     'mujoco_mjx',
     'playground',
-    'mbpo @ git+https://github.com/lasgroup/Model-based-policy-optimizers.git'
+    'cloudpickle'
 ]
 
 extras = {}

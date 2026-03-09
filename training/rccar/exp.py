@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import wandb
 
 from jax.nn import swish
-from mbpo.optimizers.policy_optimizers.ppo.ppo_brax_env import PPO
+from optimizer.ppo_mbpo.ppo_brax_env import PPO
 
 from wrappers.ActionDelayWrapper import ActionDelayWrapper
 from utils import discrete_to_continuous_discounting
@@ -95,6 +95,7 @@ def experiment(env_name: str = 'rccar',
                num_timesteps: int = 1_000_000,
                episode_steps: int = 200,
                base_discount_factor: int = 0.99,
+               base_dt_divisor: float = 2.0,
                seed: int = 0,
                num_envs: int = 4096,
                num_eval_envs: int = 128,
@@ -115,14 +116,15 @@ def experiment(env_name: str = 'rccar',
                sample_init_pos: bool = True,
                action_delay: float = 0.0,
                ):
+    print(f"RUNNING ON: {jax.devices()}")
     assert env_name in ['rccar']
-    env = RCCar(margin_factor=20, domain_randomization=domain_randomization, sample_init_pos=sample_init_pos)
+    env = RCCar(margin_factor=20, domain_randomization=domain_randomization, sample_init_pos=sample_init_pos, dt_divisor=base_dt_divisor)
     if action_delay > 0.0:
         env = ActionDelayWrapper(env=env, action_delay=action_delay)
 
-    episode_time = episode_steps * env.dt
+    episode_time = episode_steps * env.base_dt
+    eval_episode_steps = int(episode_time / env.dt)
     print(f'Environment dt {env.dt}')
-    print(f'Episode steps: {episode_time // env.dt}')
 
     new_discount_factor = base_discount_factor
 
@@ -131,7 +133,7 @@ def experiment(env_name: str = 'rccar',
                                                                     dt=env.dt)
 
         env = IHSwitchCostWrapper(env=env,
-                                  episode_steps=episode_steps,
+                                  num_integrator_steps=eval_episode_steps,
                                   min_time_between_switches=min_time_repeat * env.dt,
                                   max_time_between_switches=max_time_repeat * env.dt,
                                   switch_cost=ConstantSwitchCost(value=jnp.array(switch_cost)),
@@ -154,7 +156,8 @@ def experiment(env_name: str = 'rccar',
                   num_timesteps=num_timesteps,
                   episode_time=episode_time,
                   new_integration_dt=env.dt,
-                  new_episode_steps=episode_time // env.dt,
+                  dt_divisor = base_dt_divisor,
+                  new_episode_steps=eval_episode_steps,
                   base_discount_factor=base_discount_factor,
                   new_discount_factor=new_discount_factor,
                   seed=seed,
@@ -194,7 +197,7 @@ def experiment(env_name: str = 'rccar',
         optimizer = PPO(
             environment=env,
             num_timesteps=num_timesteps,
-            episode_length=int(episode_time // env.dt),
+            episode_length=eval_episode_steps,
             action_repeat=1,
             num_envs=num_envs,
             num_eval_envs=num_eval_envs,
@@ -230,7 +233,7 @@ def experiment(env_name: str = 'rccar',
         optimizer = PPO(
             environment=env,
             num_timesteps=num_timesteps,
-            episode_length=int(episode_time // env.dt),
+            episode_length=eval_episode_steps,
             action_repeat=1,
             num_envs=num_envs,
             num_eval_envs=num_eval_envs,
@@ -288,12 +291,11 @@ def experiment(env_name: str = 'rccar',
     print(f'Starting with evaluation')
     if switch_cost_wrapper:
         if env_name == 'rccar':
-            env = RCCar(margin_factor=20, sample_init_pos=False, domain_randomization=False)
-
+            env = RCCar(margin_factor=20, sample_init_pos=False, domain_randomization=False, dt_divisor=base_dt_divisor)
         if action_delay > 0.0:
             env = ActionDelayWrapper(env, action_delay)
         env = IHSwitchCostWrapper(env=env,
-                                  episode_steps=episode_steps,
+                                  num_integrator_steps=eval_episode_steps,
                                   min_time_between_switches=min_time_repeat * env.dt,
                                   max_time_between_switches=max_time_repeat * env.dt,
                                   switch_cost=ConstantSwitchCost(value=jnp.array(0.0)),
@@ -396,7 +398,7 @@ def experiment(env_name: str = 'rccar',
 
     else:
         if env_name == 'rccar':
-            env = RCCar(margin_factor=20, sample_init_pos=False)
+            env = RCCar(margin_factor=20, sample_init_pos=False, domain_randomization=False, dt_divisor=base_dt_divisor)
 
         if action_delay > 0.0:
             env = ActionDelayWrapper(env, action_delay)
@@ -407,7 +409,7 @@ def experiment(env_name: str = 'rccar',
             state = reset_fn(rng=jr.PRNGKey(index))
             trajectory = []
             total_steps = 0
-            while (not state.done) and (total_steps < (episode_time // env.dt)):
+            while (not state.done) and (total_steps < eval_episode_steps):
                 action = policy(state.obs)[0]
                 for _ in range(1):
                     state = step_fn(state, action)
@@ -444,6 +446,7 @@ def main(args):
                num_timesteps=args.num_timesteps,
                episode_steps=args.episode_steps,
                base_discount_factor=args.base_discount_factor,
+               base_dt_divisor=args.base_dt_divisor,
                seed=args.seed,
                num_envs=args.num_envs,
                num_eval_envs=args.num_eval_envs,
@@ -462,7 +465,7 @@ def main(args):
                min_time_repeat=args.min_time_repeat,
                domain_randomization=args.domain_randomization,
                sample_init_pos=args.sample_init_pos,
-               action_delay = args.action_delay
+               action_delay = args.action_delay,
                )
 
 
@@ -497,6 +500,6 @@ if __name__ == '__main__':
     parser.add_argument('--domain_randomization', type=int, default=1)
     parser.add_argument('--sample_init_pos', type=int, default=1)
     parser.add_argument('--action_delay', type=float, default=0.0)
-
+    parser.add_argument('--base_dt_divisor', type=float, default=2.0)
     args = parser.parse_args()
     main(args)

@@ -10,7 +10,7 @@ from brax.envs.base import State, Env
 from flax import struct
 from jaxtyping import PyTree
 
-from wtc.utils.tolerance_reward import ToleranceReward
+from utils.tolerance_reward import ToleranceReward
 
 OBS_NOISE_STD_SIM_CAR: jnp.array = 0.1 * jnp.exp(jnp.array([-4.5, -4.5, -4., -2.5, -2.5, -1.]))
 
@@ -201,8 +201,6 @@ class DynamicsModel(ABC):
         self.angle_idx = angle_idx
 
         self.dt_integration = dt_integration
-        assert(dt == 1/30)
-        assert(dt_integration == 1/90)
         assert dt >= dt_integration
         assert round(dt / dt_integration) == dt / dt_integration, 'dt must be a multiple of dt_integration'
         self._num_steps_integrate = int(dt / dt_integration)
@@ -608,7 +606,8 @@ class RCCar(Env):
                  max_steps: int = 200,
                  domain_randomization: bool = True,
                  sample_init_pos: bool = True,
-                 dt: float | None = None):
+                 dt: float | None = None,
+                 dt_divisor: float = 1.0):
         """
         Race car simulator environment
 
@@ -622,9 +621,9 @@ class RCCar(Env):
             seed: random number generator seed
         """
         if dt is None:
-            self._dt = self.base_dt
+            self._dt = self.base_dt * dt_divisor
         else:
-            self._dt = dt
+            self._dt = dt * dt_divisor
         self.dim_state: Tuple[int] = (7,) if encode_angle else (6,)
         self.encode_angle: bool = encode_angle
         self._rds_key = jax.random.PRNGKey(seed)
@@ -688,7 +687,7 @@ class RCCar(Env):
         self.ctrl_diff_weight = ctrl_diff_weight
 
     def _set_car_params(self):
-        from wtc.envs.rccar_config import (DEFAULT_PARAMS_BICYCLE_CAR1, DEFAULT_PARAMS_BLEND_CAR1,
+        from envs.rccar.sim.rccar_config import (DEFAULT_PARAMS_BICYCLE_CAR1, DEFAULT_PARAMS_BLEND_CAR1,
                                            DEFAULT_PARAMS_BICYCLE_CAR2, DEFAULT_PARAMS_BLEND_CAR2,
                                            BOUNDS_PARAMS_BICYCLE_CAR1, BOUNDS_PARAMS_BLEND_CAR1,
                                            BOUNDS_PARAMS_BICYCLE_CAR2, BOUNDS_PARAMS_BLEND_CAR2)
@@ -817,6 +816,10 @@ class RCCar(Env):
     @property
     def dt(self):
         return self._dt
+
+    @dt.setter
+    def dt(self, value):
+        self._dt = value
 
     @property
     def observation_size(self) -> int:

@@ -124,6 +124,7 @@ def generate_run_commands(command_list: List[str],
     if mode == 'euler':
         cluster_cmds = []
         bsub_cmd = 'sbatch ' + \
+                   '--export=ALL ' + \
                    f'--time={duration} ' + \
                    f'--mem-per-cpu={mem} ' + \
                    f'--cpus-per-task {num_cpus} '
@@ -134,12 +135,13 @@ def generate_run_commands(command_list: List[str],
             bsub_cmd += f'-G {num_gpus} --gres=gpumem:10240m '
 
         assert output_file_list is None or len(command_list) == len(output_file_list)
+        env_setup = ". /cluster/home/asukhija/TARC/setup_env.sh; "
         if output_file_list is None:
             for cmd in command_list:
-                cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+                cluster_cmds.append(bsub_cmd + f'--wrap="{env_setup}{cmd}"')
         else:
             for cmd, output_file in zip(command_list, output_file_list):
-                cluster_cmds.append(bsub_cmd + f'--output={output_file} --wrap="{cmd}"')
+                cluster_cmds.append(bsub_cmd + f'--output={output_file} --wrap="{env_setup}{cmd}"')
 
         if dry:
             for cmd in cluster_cmds:
