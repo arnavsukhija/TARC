@@ -15,7 +15,7 @@ os.environ.pop("JAX_PLATFORMS", None)
 
 rccar_switch_cost = {'env_name': ['rccar', ],
                      'backend': ['generalized', ],
-                     'project_name': ["TARC_RCCar"],
+                     'project_name': ["TARC_RCCar_SwitchCosts"],
                      'num_timesteps': [75_000_000, ],
                      'episode_steps': [200, ],
                      'base_discount_factor': [0.9],
@@ -29,13 +29,14 @@ rccar_switch_cost = {'env_name': ['rccar', ],
                      'batch_size': [1024],
                      'networks': [0, ],
                      'reward_scaling': [1.0, ],
-                     'switch_cost': [0.1, ],
-                     'max_time_repeat': [2,3,4,5,10],
+                     'switch_cost': [0.05, 0.1, 0.2, 0.5],
+                     'max_time_repeat': [3, 4, 5, 10],
                      'time_as_part_of_state': [1, ],
                      'num_final_evals': [10, ],
                      'domain_randomization': [1, ],
                      'sample_init_pos': [1,],
-                     'action_delay': [2.0]
+                     'action_delay': [2.0],
+                     'base_dt_divisor': [1],   # 30Hz base — matches original paper experiments
                      }
 
 rccar_no_switch_cost_ppo = {'env_name': ['rccar', ],
@@ -68,7 +69,7 @@ rccar_no_switch_cost_ppo = {'env_name': ['rccar', ],
 
 def main():
     command_list = []
-    flags_combinations = dict_permutations(rccar_no_switch_cost_ppo)
+    flags_combinations = dict_permutations(rccar_switch_cost)
     for flags in flags_combinations:
         cmd = generate_base_command(exp, flags=flags)
         command_list.append(cmd)
