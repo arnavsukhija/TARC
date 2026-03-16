@@ -138,10 +138,13 @@ def generate_run_commands(command_list: List[str],
         env_setup = ". /cluster/home/asukhija/TARC/setup_env.sh; "
         if output_file_list is None:
             for cmd in command_list:
-                cluster_cmds.append(bsub_cmd + f'--wrap="{env_setup}{cmd}"')
+                # Use bash -c to ensure setup_env.sh (which uses bash-isms) runs correctly
+                full_cmd = f"{env_setup}{cmd}"
+                cluster_cmds.append(bsub_cmd + f'--wrap="/bin/bash -c \'{full_cmd}\'"')
         else:
             for cmd, output_file in zip(command_list, output_file_list):
-                cluster_cmds.append(bsub_cmd + f'--output={output_file} --wrap="{env_setup}{cmd}"')
+                full_cmd = f"{env_setup}{cmd}"
+                cluster_cmds.append(bsub_cmd + f'--output={output_file} --wrap="/bin/bash -c \'{full_cmd}\'"')
 
         if dry:
             for cmd in cluster_cmds:

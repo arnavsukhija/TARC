@@ -1,4 +1,13 @@
-import training
+import os
+import sys
+
+# Ensure the project root is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
+# Temporarily set JAX to use CPU during launcher initialization on the login node 
+# to prevent CUDA_ERROR_NO_DEVICE crashes.
+
+import training_go1
 from training.euler_util import generate_run_commands, generate_base_command, dict_permutations, available_gpus
 
 ################################################
@@ -6,33 +15,49 @@ from training.euler_util import generate_run_commands, generate_base_command, di
 ################################################
 go1_switch_cost = {'env_name': ['Go1JoystickFlatTerrain', ],
                      'backend': ['generalized', ],
-                     'project_name': ["TaCoSGo1JoystickFlatTerrain_returnLastModel"],
+                     'project_name': ["Go1_Stability_Rebuttal"],
                      'seed': list(range(5)),
                      'switch_cost': [0.005],
-                     'max_time_repeat': [3,4,5,10],
+                     'max_time_repeat': [4,5,10],
                      'min_time_repeat': [1,],
                      'time_as_part_of_state': [1, ],
                      'num_final_evals': [1, ],
-                      'perturb' : [0, ],
+                      'perturb' : [1, ],
+                      'switch_cost_wrapper': [1],
                      }
 
-go1_no_switch_cost_ppo = {'env_name': ['Go1JoystickFlatTerrain', ],
-                     'backend': ['generalized', ],
-                     'project_name': ["PPOGo1JoystickFlatTerrain_returnLastModel"],
-                     'seed': list(range(5)),
-                     'switch_cost': [0, ],
-                     'time_as_part_of_state': [0, ],
-                     'num_final_evals': [1, ],
-                     'perturb' : [0, ],
-                     'switch_cost_wrapper': [0, ], # normal PPO (without switch cost wrapping)
-                     }
+go1_ppo_baselines = {
+    'env_name': ['Go1JoystickFlatTerrain'],
+    'backend': ['generalized'],
+    'project_name': ["Go1_Stability_Rebuttal"],
+    'seed': list(range(5)),
+    'perturb': [1],
+    'base_dt_divisor': [1, 4, 5, 10], # 50Hz, 25Hz, 10Hz, 5Hz
+    'switch_cost_wrapper': [0],
+}
 
+go1_tarc_runs = {
+    'env_name': ['Go1JoystickFlatTerrain'],
+    'backend': ['generalized'],
+    'project_name': ["Go1_Sensitivity_Rebuttal"],
+    'seed': list(range(5)),
+    'switch_cost': [0.0001, 0.001, 0.005, 0.01, 0.05, 0.1],
+    'min_time_repeat': [1,],
+    'max_time_repeat': [3, 4, 5, 10],
+    'time_as_part_of_state': [1],
+    'num_final_evals': [1],
+    'perturb': [1],
+    'switch_cost_wrapper': [1],
+}
 
 def main():
     command_list = []
-    flags_combinations = dict_permutations(go1_switch_cost)
-    for flags in flags_combinations:
-        cmd = generate_base_command(training, flags=flags)
+    
+    # Generate PPO baseline commands
+
+    # Generate TARC commands
+    for flags in dict_permutations(go1_tarc_runs):
+        cmd = generate_base_command(training_go1, flags=flags)
         command_list.append(cmd)
 
     # submit jobs

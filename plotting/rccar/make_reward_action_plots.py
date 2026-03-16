@@ -170,12 +170,16 @@ def create_tarc_sim_vs_hw_plot(agent_names, sim_data, hw_data, min_freqs):
     print(f"--- Final plot saved as: {output_filename} ---")
 
 def load_sim_data_from_json(filename, agent_names):
+    import os
+    if not os.path.exists(filename):
+        # fallback to local dir
+        filename = os.path.basename(filename)
     try:
         with open(filename, 'r') as f:
             all_data = json.load(f)
     except FileNotFoundError:
-        print(f"--- File {filename} not found! ---")
-        return None
+        print(f"--- File {filename} not found! Returning Zeroes. ---")
+        return [0]*len(agent_names), [0]*len(agent_names), [0]*len(agent_names), [0]*len(agent_names), [0]*len(agent_names), [0]*len(agent_names)
 
     pen_rewards = all_data.get('penalized_rewards', {})
     unpen_rewards = all_data.get('unpenalized_rewards', {})
@@ -189,31 +193,87 @@ def load_sim_data_from_json(filename, agent_names):
     sim_fs = [frequencies.get(name, {}).get('sem', 0) for name in agent_names]
 
     return sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs
+    
+def create_sim_comparison_plot(agent_names, sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs, min_freqs):
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    print("\\n--- Generating Sim-only comparison plot... ---")
+    plt.style.use(['science', 'ieee'])
+    fig, axes = plt.subplots(1, 3, figsize=(8.5, 3.5))
+
+    base_colors = sns.color_palette("colorblind")
+    colors = []
+    for name in agent_names:
+        if 'PPO-30' in name or name == 'Baseline':
+            colors.append('gray')
+        elif 'PPO' in name:
+            colors.append(base_colors[0])
+        elif 'TARC' in name:
+            colors.append(base_colors[1])
+        else:
+            colors.append('gray')
+
+    x = np.arange(len(agent_names))
+    bar_width = 0.6
+
+    # Plot 1: Penalized Reward
+    axes[0].bar(x, sim_pen_rm, bar_width, yerr=sim_pen_rs, capsize=3, color=colors)
+    axes[0].set_title('(a) Penalized Reward')
+    axes[0].set_ylabel('Total Reward')
+
+    # Plot 2: Unpenalized Reward
+    axes[1].bar(x, sim_unpen_rm, bar_width, yerr=sim_unpen_rs, capsize=3, color=colors)
+    axes[1].set_title('(b) Unpenalized Reward')
+
+    # Plot 3: Average Control Frequency
+    axes[2].bar(x, sim_fm, bar_width, yerr=sim_fs, capsize=3, color=colors)
+    for i, agent_name in enumerate(agent_names):
+        if min_freqs and i < len(min_freqs) and min_freqs[i] is not None:
+            axes[2].hlines(y=min_freqs[i], xmin=i - bar_width/2, xmax=i + bar_width/2,
+                           colors='black', linestyles='dashed', lw=1.5)
+    axes[2].set_title('(c) Avg. Control Frequency')
+    axes[2].set_ylabel('Frequency (Hz)')
+
+    # Global Formatting
+    for ax in axes:
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha="right", fontsize=9)
+        y_min, y_max = ax.get_ylim()
+        ax.set_ylim(bottom=min(0, y_min), top=y_max * 1.15)
+
+    custom_lines = [
+        Patch(facecolor='gray', label='High-Freq Baseline (Fixed)'),
+        Patch(facecolor=base_colors[0], label='Low-Freq Baseline (Fixed)'),
+        Patch(facecolor=base_colors[1], label='TARC (Adaptive)'),
+        Line2D([0], [0], color='black', lw=1.5, linestyle='--', label='Min Freq Bound')
+    ]
+    fig.legend(handles=custom_lines, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False, fontsize=10)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.9])
+
+    output_filename = 'RC_Car_Sim_LowFreq_Comparison.pdf'
+    plt.savefig(output_filename)
+    print(f"--- Final plot saved as: {output_filename} ---")
+
 # --- 3. Main Execution Block ---
 if __name__ == '__main__':
-    agent_names = ['Baseline', 'TARC']
-
-    # These are the tags used in your wandb project
+    agent_names = ['Baseline', 'TARC-4']  # We want TARC-4 here
+    # TARC-4 was max_time_repeat=3, which is 10Hz.
+    
     wandb_tags = ['ppo', 'hardware_4actions']
-
-    # Theoretical minimum frequency for each agent
     minimum_frequencies = [30, 7.5]
 
-    # Fetch data for PENALIZED rewards (switch cost = 0.1 for TaCoS)
-    # The frequency data is the same regardless of the penalize flag, so we can ignore it here.
     mean_pen_rewards, std_pen_rewards, _, _ = get_rc_car_data(wandb_tags, penalize=True, switch_cost=0.1)
-
-    # Fetch data for UNPENALIZED rewards and for FREQUENCY
-    mean_unpen_rewards, std_unpen_rewards, mean_frequencies, std_frequencies = get_rc_car_data(wandb_tags,
-                                                                                               penalize=False,
-                                                                                               switch_cost=0.1)
+    mean_unpen_rewards, std_unpen_rewards, mean_frequencies, std_frequencies = get_rc_car_data(wandb_tags, penalize=False, switch_cost=0.1)
     hw_data = (mean_pen_rewards, std_pen_rewards, mean_unpen_rewards, std_unpen_rewards, mean_frequencies, std_frequencies)
 
-    sim_data = load_sim_data_from_json('RCCar_simulation_results.json', agent_names)
+    # Make sure we read from the absolute path or locally
+    import os
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RCCar_simulation_results.json')
+    sim_data = load_sim_data_from_json(json_path, agent_names)
     create_tarc_sim_vs_hw_plot(agent_names, sim_data, hw_data, minimum_frequencies)
-    # Call the plotting function with all the processed data
     create_rc_car_combined_plot(
-        agent_names=agent_names,
+        agent_names=['Baseline', 'TARC'], # HW names
         pen_reward_means=mean_pen_rewards,
         pen_reward_stds=std_pen_rewards,
         unpen_reward_means=mean_unpen_rewards,
@@ -221,4 +281,37 @@ if __name__ == '__main__':
         freq_means=mean_frequencies,
         freq_stds=std_frequencies,
         min_freqs=minimum_frequencies
+    )
+    
+    # === SIM-ONLY COMPARISON PLOT ===
+    # Compare Baseline, PPO (Low Freq), and TARC variants matching frequency bounds
+    target_agents = [
+        'Baseline', 
+        'PPO-15', 
+        'PPO-10', 'TARC-3', 
+        'PPO-7.5', 'TARC-4', 
+        'TARC-5', 
+        'TARC-10'
+    ]
+    
+    comp_agents = [
+        'PPO-30', 
+        'PPO-15', 
+        'PPO-10', 'TARC-3', 
+        'PPO-7.5', 'TARC-4', 
+        'TARC-5', 
+        'TARC-10'
+    ]
+    sim_data_comp = load_sim_data_from_json(json_path, target_agents)
+    
+    comp_pen_rm, comp_pen_rs, comp_unpen_rm, comp_unpen_rs, comp_fm, comp_fs = sim_data_comp
+    
+    comp_min_freqs = [30, 15, 10, 10, 7.5, 7.5, 6, 3]
+    
+    create_sim_comparison_plot(
+        comp_agents,
+        comp_pen_rm, comp_pen_rs,
+        comp_unpen_rm, comp_unpen_rs,
+        comp_fm, comp_fs,
+        comp_min_freqs
     )

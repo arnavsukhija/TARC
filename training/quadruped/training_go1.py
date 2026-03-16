@@ -1,9 +1,9 @@
 import argparse
 import datetime
 import functools
-import os
 import cloudpickle
 from datetime import datetime
+import os
 
 import jax
 import jax.numpy as jnp
@@ -20,16 +20,28 @@ from wrappers.ih_switching_cost_mjx import ConstantSwitchCost, IHSwitchCostWrapp
 from mujoco_playground import registry
 from mujoco_playground.config import locomotion_params
 
+import contextlib
+from mujoco_playground._src import wrapper as mj_wrapper
+from mujoco import mjx
+
+def patched_v_env_fn(self, mjx_model: mjx.Model):
+    env = self.env
+    unwrapped = env.unwrapped
+    old_mjx_model = unwrapped._mjx_model
+    try:
+        unwrapped._mjx_model = mjx_model
+        yield env
+    finally:
+        unwrapped._mjx_model = old_mjx_model
+
+mj_wrapper.BraxDomainRandomizationVmapWrapper.v_env_fn = contextlib.contextmanager(patched_v_env_fn)
+
 
 from jax import config
 
 config.update("jax_debug_nans", True)
 
 ENTITY = 'asukhija'
-
-# fix rendering
-os.environ["MUJOCO_GL"] = "egl"
-
 
 def save_policy(policy_params):
     if wandb.run is None:
@@ -77,11 +89,19 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                time_as_part_of_state: bool = True,
                num_final_evals: int = 10,
                perturb: bool = False,
+               base_dt_divisor: int = 1,
                ):
 
     env_cfg = registry.get_default_config(env_name)
     if perturb:
         env_cfg.pert_config.enable = True
+    
+    # Apply base_dt_divisor to lower the control frequency for PPO baselines
+    if base_dt_divisor > 1:
+        env_cfg.ctrl_dt *= base_dt_divisor
+        print(f"Lowering control frequency: new ctrl_dt = {env_cfg.ctrl_dt} ({1.0/env_cfg.ctrl_dt:.2f} Hz)")
+
+    control_frequency_hz = 1.0 / env_cfg.ctrl_dt
     go1_env = registry.load(env_name, env_cfg)
     ppo_params = locomotion_params.brax_ppo_config(env_name)
     ppo_config = dict(ppo_params)
@@ -90,6 +110,10 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     discount_factor = ppo_config['discounting']
     entropy_cost = ppo_config['entropy_cost']
     episode_length = ppo_config['episode_length']
+    # Scale episode length to keep same physical simulation time across frequencies
+    if base_dt_divisor > 1:
+        episode_length = episode_length // base_dt_divisor
+        print(f"Adjusted episode_length = {episode_length} (same physical time: {episode_length * env_cfg.ctrl_dt:.1f}s)")
     learning_rate = ppo_config['learning_rate']
     max_grad_norm = ppo_config['max_grad_norm']
     policy_hidden_layer_sizes = ppo_config['network_factory']['policy_hidden_layer_sizes']
@@ -101,7 +125,8 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     num_evals = ppo_config['num_evals']
     num_minibatches = ppo_config['num_minibatches']
     num_resets_per_eval = ppo_config['num_resets_per_eval']
-    num_timesteps = ppo_config['num_timesteps']*3 ## train longer for 600mil time steps
+    num_timesteps = ppo_config['num_timesteps'] ## train longer for 600mil time steps
+    num_timesteps = num_timesteps*3
     num_updates_per_batch = ppo_config['num_updates_per_batch']
     reward_scaling = ppo_config['reward_scaling']
     unroll_length = ppo_config['unroll_length']
@@ -137,6 +162,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                   episode_time=episode_length * go1_env.dt,
                   sim_dt=sim_dt,
                   control_dt=ctrl_dt,
+                  control_frequency_hz=control_frequency_hz,
                   new_episode_steps=episode_length,
                   base_discount_factor=discount_factor,
                   seed=seed,
@@ -165,6 +191,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                   normalize_observations = normalize_observations,
                   clipping_epsilon = 0.3,
                   gae_lambda = 0.95,
+                  base_dt_divisor = base_dt_divisor,
                   )
     if switch_cost_wrapper:
         wandb.init(
@@ -384,6 +411,11 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
         env_cfg = registry.get_default_config(env_name)
         env_cfg.pert_config.enable = perturb
         env_cfg.command_config.a = [1.5, 0.8, 2 * jnp.pi]
+        if base_dt_divisor > 1:
+            env_cfg.ctrl_dt *= base_dt_divisor
+            print(f"Lowering eval control frequency: new ctrl_dt = {env_cfg.ctrl_dt} ({1.0 / env_cfg.ctrl_dt:.2f} Hz)")
+            env_cfg.episode_length = env_cfg.episode_length // base_dt_divisor
+            print(f"Adjusted episode_length = {env_cfg.episode_length} (same physical time: {env_cfg.episode_length * env_cfg.ctrl_dt:.1f}s)")
         eval_env = registry.load(env_name, config=env_cfg)
         env = go1_env
         jit_reset = jax.jit(eval_env.reset)
@@ -459,9 +491,11 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                             / env_cfg.command_config.a[0],
                     )
                 )
+            avg_control_freq = num_steps / (episode_length * ctrl_dt)
             wandb.log({f'Results_{i}/Total reward ': total_reward})
             wandb.log({f'Results_{i}/Number of actions': num_steps})
-            print(f"Agent got {total_reward} reward")
+            wandb.log({f'Results_{i}/Avg control frequency (Hz)': avg_control_freq})
+            print(f"Agent got {total_reward} reward at avg {avg_control_freq:.1f} Hz ({num_steps} actions)")
 
     wandb.finish()
 
@@ -478,6 +512,7 @@ def main(args):
                time_as_part_of_state=bool(args.time_as_part_of_state),
                num_final_evals=args.num_final_evals,
                min_time_repeat=args.min_time_repeat,
+               base_dt_divisor=args.base_dt_divisor,
                )
 
 
@@ -495,5 +530,6 @@ if __name__ == '__main__':
     parser.add_argument('--time_as_part_of_state', type=int, default=1)
     parser.add_argument('--num_final_evals', type=int, default=10)
     parser.add_argument('--perturb', type=int, default=0)
+    parser.add_argument('--base_dt_divisor', type=int, default=1)
     args = parser.parse_args()
     main(args)
