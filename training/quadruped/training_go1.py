@@ -90,9 +90,31 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                num_final_evals: int = 10,
                perturb: bool = False,
                base_dt_divisor: int = 1,
+               # Auto-tuning lambda via dual gradient ascent on a constrained MDP.
+               # Constraint: mean switches per episode <= K (per 1000 inner env steps).
+               # Dual update: lambda_{k+1} = clip(lambda_k + alpha * (switch_rate - K_rate), 0, lambda_max)
+               use_auto_lambda: bool = False,
+               K_ratio: float = 0.3,
+               alpha_lambda: float = 0.05,
+               lambda_init: float = 0.005,
+               lambda_min: float = 0.0,
+               lambda_max: float = 1.0,
+               policy_path: str = None,
+               wandb_run_id: str = None,
                ):
 
     env_cfg = registry.get_default_config(env_name)
+    if isinstance(env_cfg, dict):
+        env_cfg['impl'] = 'jax'
+    elif hasattr(env_cfg, 'impl'):
+        env_cfg.impl = 'jax'
+
+    if hasattr(env_cfg, 'sim_config'):
+        if hasattr(env_cfg.sim_config, dict):
+            env_cfg.sim_config['impl'] = 'jax'
+        elif hasattr(env_cfg.sim_config, 'impl'):
+            env_cfg.sim_config.impl = 'jax'
+
     if perturb:
         env_cfg.pert_config.enable = True
     
@@ -122,7 +144,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     policy_obs_key = ppo_config['network_factory']['policy_obs_key']
     normalize_observations = ppo_config['normalize_observations']
     num_envs = ppo_config['num_envs']
-    num_evals = ppo_config['num_evals']
+    num_evals = ppo_config['num_evals'] * 10 if use_auto_lambda else ppo_config['num_evals']
     num_minibatches = ppo_config['num_minibatches']
     num_resets_per_eval = ppo_config['num_resets_per_eval']
     num_timesteps = ppo_config['num_timesteps'] ## train longer for 600mil time steps
@@ -137,11 +159,13 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     randomization_fn = registry.get_domain_randomizer(env_name)
 
     if switch_cost_wrapper:
+        # When using auto-lambda, start from lambda_init; otherwise use the fixed switch_cost.
+        initial_switch_cost = lambda_init if use_auto_lambda else switch_cost
         env = IHSwitchCostWrapper(env=go1_env,
                                   episode_steps=episode_length,
                                   min_time_between_switches=min_time_repeat,
                                   max_time_between_switches=max_time_repeat,
-                                  switch_cost=ConstantSwitchCost(value=jnp.array(switch_cost)),
+                                  switch_cost=ConstantSwitchCost(value=jnp.array(initial_switch_cost)),
                                   discounting=discount_factor,
                                   time_as_part_of_state=time_as_part_of_state,
                                   sim_dt = sim_dt,
@@ -151,7 +175,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                                   min_time_between_switches=min_time_repeat,
                                   max_time_between_switches=max_time_repeat,
                                   switch_cost=ConstantSwitchCost(value=jnp.array(0.0)),
-                                  discounting=1.0,
+                                  discounting=discount_factor,
                                   time_as_part_of_state=time_as_part_of_state,
                                   sim_dt = sim_dt,
                                   )
@@ -192,8 +216,20 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                   clipping_epsilon = 0.3,
                   gae_lambda = 0.95,
                   base_dt_divisor = base_dt_divisor,
+                  use_auto_lambda = use_auto_lambda,
+                  K_ratio = K_ratio,
+                  alpha_lambda = alpha_lambda,
+                  lambda_init = lambda_init,
                   )
-    if switch_cost_wrapper:
+    if policy_path is not None and wandb_run_id is not None:
+        # Log to a separate eval project to avoid crowding the training runs.
+        # Name the run after the original training run ID for traceability.
+        wandb.init(
+            project=project_name + '_Eval',
+            name=wandb_run_id,
+            config={**config, 'train_run_id': wandb_run_id},
+        )
+    elif switch_cost_wrapper:
         wandb.init(
             project=project_name,
             group=f"max_actions{max_time_repeat}",
@@ -282,6 +318,10 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
         )
     xdata, ydata = [], []
     times = [datetime.now()]
+
+    # Mutable container so the closure can rebind across epochs.
+    lambda_state = [lambda_init if use_auto_lambda else switch_cost]
+
     def progress(num_steps, metrics):
         times.append(datetime.now())
         xdata.append(num_steps)
@@ -291,11 +331,41 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
         plt.plot(xdata, ydata)
         plt.show()
 
-    print('Before inference')
-    policy_params, metrics = optimizer.run_training(key=jr.PRNGKey(seed), progress_fn=progress)
-    print('After inference')
-    save_policy(policy_params)
-    print("Policy saved to wandb!")
+        if not (use_auto_lambda and switch_cost_wrapper):
+            return
+
+        # Dual gradient ascent: constraint is E[Σ_k γ^{T_k}] * (1-γ) <= K_ratio.
+        # disc_switch_sum is the episode-averaged sum of γ^{T_k} (one term per policy query).
+        # Normalising by (1-γ) maps it to [0,1] where 1 = maximum possible switching rate.
+        disc_switch_sum = float(metrics.get('eval/episode_discounted_switch_weight', 0.0))
+        ratio = disc_switch_sum * (1 - discount_factor)
+        violation = ratio - K_ratio
+
+        new_lambda = float(np.clip(lambda_state[0] + alpha_lambda * violation, lambda_min, lambda_max))
+        lambda_state[0] = new_lambda
+
+        # Replace with NEW object: ConstantSwitchCost.__call__ is @jit with
+        # static_argnums=(0,), so a new object ID forces re-trace with the updated value.
+        env.switch_cost = ConstantSwitchCost(value=jnp.array(new_lambda, dtype=jnp.float32))
+
+        wandb.log({
+            'auto_lambda/lambda_val':        new_lambda,
+            'auto_lambda/disc_switch_ratio': ratio,
+            'auto_lambda/K_ratio':           float(K_ratio),
+            'auto_lambda/violation':         violation,
+        })
+
+    if policy_path is not None:
+        print(f'Loading policy from {policy_path}')
+        with open(policy_path, 'rb') as f:
+            policy_params = cloudpickle.load(f)
+        print('Policy loaded.')
+    else:
+        print('Before inference')
+        policy_params, metrics = optimizer.run_training(key=jr.PRNGKey(seed), progress_fn=progress)
+        print('After inference')
+        save_policy(policy_params)
+        print("Policy saved to wandb!")
 
     ########################## Policy Rollout ##########################
     ################################################################
@@ -303,8 +373,19 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     print(f'Starting with rollout')
     if switch_cost_wrapper:
         env_cfg = registry.get_default_config(env_name)
+        if isinstance(env_cfg, dict):
+            env_cfg['impl'] = 'jax'
+        elif hasattr(env_cfg, 'impl'):
+            env_cfg.impl = 'jax'
+        
+        if hasattr(env_cfg, 'sim_config'):
+            if hasattr(env_cfg.sim_config, dict):
+                env_cfg.sim_config['impl'] = 'jax'
+            elif hasattr(env_cfg.sim_config, 'impl'):
+                env_cfg.sim_config.impl = 'jax'
+
+
         env_cfg.pert_config.enable = perturb
-        env_cfg.command_config.a = [1.5, 0.8, 2 * jnp.pi]
         eval_env = registry.load(env_name, config=env_cfg)
         eval_env = IHSwitchCostWrapper(env=eval_env,
                                   episode_steps=episode_length,
@@ -320,11 +401,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
 
         from mujoco_playground._src.gait import draw_joystick_command
 
-        x_vel = 0.0  # @param {type: "number"}
-        y_vel = 0.0  # @param {type: "number"}
-        yaw_vel = 3.14  # @param {type: "number"}
-
-        seeds = [42,43,44]
+        seeds = range(10)
         for i in seeds:
 
             rng = jax.random.PRNGKey(i)
@@ -339,24 +416,25 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
             foot_vel = []
             rews = []
             contact = []
-            command = jnp.array([x_vel, y_vel, yaw_vel])
             num_steps = 0
             time_predictions = []
 
             state = jit_reset(rng)
-            state.info["command"] = command
+            # Use the command sampled by the env (matches training distribution).
+            command = state.info["command"]
             env_steps = 0
             total_reward = 0.0
+            disc_switch_sum = 0.0
             while env_steps < env_cfg.episode_length:
                 act_rng, rng = jax.random.split(rng)
                 ctrl, _ = jit_inference_fn(state.obs, act_rng)
-                time_predictions.append(ctrl[-1])
                 state= jit_step(state, ctrl)
                 num_steps += 1
-                predicted_time = env.compute_steps(pseudo_time=ctrl[-1])
+                predicted_time = eval_env.compute_steps(pseudo_time=ctrl[-1])
                 time_predictions.append(predicted_time)
+                # env_steps is T_k (elapsed inner steps when this switch fires)
+                disc_switch_sum += float(discount_factor ** env_steps)
                 env_steps += predicted_time
-                state.info["command"] = command
                 rews.append(
                     {k: v for k, v in state.metrics.items() if k.startswith("reward/")}
                 )
@@ -366,24 +444,24 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                 rewards.append(
                     {k[7:]: v for k, v in state.metrics.items() if k.startswith("reward/")}
                 )
-                linvel.append(env.env.get_global_linvel(state.data))
-                angvel.append(env.env.get_gyro(state.data))
+                linvel.append(eval_env.env.get_global_linvel(state.data))
+                angvel.append(eval_env.env.get_gyro(state.data))
                 track.append(
-                    env.env._reward_tracking_lin_vel(
-                        state.info["command"], env.env.get_local_linvel(state.data)
+                    eval_env.env._reward_tracking_lin_vel(
+                        state.info["command"], eval_env.env.get_local_linvel(state.data)
                     )
                 )
 
-                feet_vel = state.data.sensordata[env.env._foot_linvel_sensor_adr]
+                feet_vel = state.data.sensordata[eval_env.env._foot_linvel_sensor_adr]
                 vel_xy = feet_vel[..., :2]
                 vel_norm = jnp.sqrt(jnp.linalg.norm(vel_xy, axis=-1))
                 foot_vel.append(vel_norm)
 
                 contact.append(state.info["last_contact"])
 
-                xyz = np.array(state.data.xpos[env.env._torso_body_id])
+                xyz = np.array(state.data.xpos[eval_env.env._torso_body_id])
                 xyz += np.array([0, 0, 0.2])
-                x_axis = state.data.xmat[env.env._torso_body_id, 0]
+                x_axis = state.data.xmat[eval_env.env._torso_body_id, 0]
                 yaw = -np.arctan2(x_axis[1], x_axis[0])
                 modify_scene_fns.append(
                     functools.partial(
@@ -399,12 +477,21 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
             plt.figure(figsize=(10, 6))
             plt.plot(action_steps, time_predictions, marker='o', linestyle='-', color='b')
             plt.xlabel('Control step')
-            plt.ylabel('Time Prediction')
+            plt.ylabel('Hold duration (inner steps)')
             plt.title('Hold predictions')
-            wandb.log({f'Results_{i}/Total reward': total_reward})
-            wandb.log({f'Results_{i}/Number of actions': num_steps})
-            wandb.log({f"Results_{i}/Time Prediction Plot": wandb.Image(plt)})
-            print(f"The agent took {num_steps} actions")
+            disc_switch_ratio = disc_switch_sum * (1 - discount_factor)
+            wandb.log({
+                f'Results_{i}_random/Total reward':       total_reward,
+                f'Results_{i}_random/Number of actions':  num_steps,
+                f'Results_{i}_random/disc_switch_ratio':  disc_switch_ratio,
+                f'Results_{i}_random/K_ratio':            K_ratio,
+                f'Results_{i}_random/Command x_vel':      float(command[0]),
+                f'Results_{i}_random/Command y_vel':      float(command[1]),
+                f'Results_{i}_random/Command yaw_vel':    float(command[2]),
+                f'Results_{i}_random/Time Prediction Plot': wandb.Image(plt),
+            })
+            print(f"Command: x_vel={float(command[0]):.2f}, y_vel={float(command[1]):.2f}, yaw_vel={float(command[2]):.2f}")
+            print(f"The agent took {num_steps} actions | disc_switch_ratio={disc_switch_ratio:.4f} (K_ratio={K_ratio})")
             print(f"Agent got {total_reward} reward")
     else:
         # Enable perturbation in the eval env.
@@ -512,7 +599,16 @@ def main(args):
                time_as_part_of_state=bool(args.time_as_part_of_state),
                num_final_evals=args.num_final_evals,
                min_time_repeat=args.min_time_repeat,
+               perturb=bool(args.perturb),
                base_dt_divisor=args.base_dt_divisor,
+               use_auto_lambda=bool(args.use_auto_lambda),
+               K_ratio=args.K_ratio,
+               alpha_lambda=args.alpha_lambda,
+               lambda_init=args.lambda_init,
+               lambda_min=args.lambda_min,
+               lambda_max=args.lambda_max,
+               policy_path=args.policy_path,
+               wandb_run_id=args.wandb_run_id,
                )
 
 
@@ -531,5 +627,15 @@ if __name__ == '__main__':
     parser.add_argument('--num_final_evals', type=int, default=10)
     parser.add_argument('--perturb', type=int, default=0)
     parser.add_argument('--base_dt_divisor', type=int, default=1)
+    parser.add_argument('--use_auto_lambda', type=int, default=0)
+    parser.add_argument('--K_ratio', type=float, default=0.3)
+    parser.add_argument('--alpha_lambda', type=float, default=0.05)
+    parser.add_argument('--lambda_init', type=float, default=0.005)
+    parser.add_argument('--lambda_min', type=float, default=0.0)
+    parser.add_argument('--lambda_max', type=float, default=1.0)
+    parser.add_argument('--policy_path', type=str, default=None,
+                        help='Path to a saved policy pkl file. If given, skips training.')
+    parser.add_argument('--wandb_run_id', type=str, default=None,
+                        help='W&B run ID to resume when loading a policy (eval-only mode).')
     args = parser.parse_args()
     main(args)

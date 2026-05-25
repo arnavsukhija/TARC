@@ -4,7 +4,6 @@ import os
 import sys
 from typing import Dict, Optional, Any, List, NamedTuple
 
-import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
