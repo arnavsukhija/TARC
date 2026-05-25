@@ -20,6 +20,7 @@ class AugmentedPipelineState(NamedTuple):
     time: Float[Array, 'None']
 
 
+
 class SwitchCost:
     @abstractmethod
     def __call__(self,
@@ -96,6 +97,14 @@ class IHSwitchCostWrapper(mjx_env.MjxEnv):
         """
         state = self.env.reset(rng)
         time = jnp.array(0)
+        # Seed wrapper-specific metrics so EvalWrapper includes them in its accumulator.
+        # EvalWrapper initialises episode_metrics via zeros_like(reset_state.metrics),
+        # so any key absent here is silently ignored during accumulation.
+        state = state.replace(metrics={
+            **state.metrics,
+            'num_inner_steps': jnp.float32(0.0),
+            'discounted_switch_weight': jnp.float32(0.0),
+        })
         if self.time_as_part_of_state:
             # we check whether the state observation is a jax.Array or a mapping, and extract the obs accordingly for the concatenation
             augmented_obs = self._add_time_to_obs(state, time)
@@ -171,7 +180,7 @@ class IHSwitchCostWrapper(mjx_env.MjxEnv):
                     next_accumulated_metrics_dict[k] = jnp.where(next_s.done, current_accumulated_metrics_dict[k],
                                                                  jnp.maximum(current_accumulated_metrics_dict[k],v))
                 else:
-                    continue
+                    next_accumulated_metrics_dict[k] = current_accumulated_metrics_dict[k]
             return next_s, next_reward, i + 1, next_accumulated_metrics_dict
 
         def cond_integration_step(val):
@@ -190,6 +199,15 @@ class IHSwitchCostWrapper(mjx_env.MjxEnv):
 
         # Add switch cost to the total reward
         total_reward = total_reward - self.switch_cost(state=state.obs, action=u)
+
+        # Track inner steps per action so callers can compute switch rate (switches per inner step).
+        # Each wrapper step is exactly one policy query (one switch); index tells how many inner
+        # env steps were consumed for that switch.
+        final_metrics_dict = {
+            **final_metrics_dict,
+            'num_inner_steps': jnp.float32(index),
+            'discounted_switch_weight': jnp.float32(self.discounting ** time),
+        }
 
         # Prepare augmented obs (how many steps we actually took)
         next_time = (time + index)
