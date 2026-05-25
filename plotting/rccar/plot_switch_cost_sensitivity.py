@@ -111,11 +111,11 @@ def create_sensitivity_plot(results):
 
     axes[0].set_title('(a) Unpenalized Reward')
     axes[0].set_ylabel('Total Reward')
-    axes[0].set_xlabel('Switch Cost')
+    axes[0].set_xlabel('Switch Cost $c$')
 
     axes[1].set_title('(b) Avg. Control Frequency')
     axes[1].set_ylabel('Frequency (Hz)')
-    axes[1].set_xlabel('Switch Cost')
+    axes[1].set_xlabel('Switch Cost $c$')
 
     for ax in axes:
         ax.set_xscale('log')

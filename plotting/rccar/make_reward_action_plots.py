@@ -251,8 +251,10 @@ def create_sim_comparison_plot(agent_names, sim_pen_rm, sim_pen_rs, sim_unpen_rm
 
     fig.tight_layout(rect=[0, 0, 1, 0.9])
 
-    output_filename = 'RC_Car_Sim_LowFreq_Comparison.pdf'
+    import os as _os
+    output_filename = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'RC_Car_Sim_LowFreq_Comparison.pdf')
     plt.savefig(output_filename)
+    plt.savefig(output_filename.replace('.pdf', '.png'), dpi=300)
     print(f"--- Final plot saved as: {output_filename} ---")
 
 # --- 3. Main Execution Block ---
@@ -284,30 +286,31 @@ if __name__ == '__main__':
     )
     
     # === SIM-ONLY COMPARISON PLOT ===
-    # Compare Baseline, PPO (Low Freq), and TARC variants matching frequency bounds
+    # Low-freq baselines placed next to matching TARC variant by actual operating frequency:
+    #   TARC-3 ~15 Hz  → paired with PPO-15
+    #   TARC-4 ~10 Hz  → paired with PPO-10
+    #   TARC-5 ~7.5 Hz → paired with PPO-7.5
+    # RC car base freq = 30 Hz; TARC-N min bound = 30/N Hz
     target_agents = [
-        'Baseline', 
-        'PPO-15', 
-        'PPO-10', 'TARC-3', 
-        'PPO-7.5', 'TARC-4', 
-        'TARC-5', 
-        'TARC-10'
+        'PPO-15', 'TARC-3',     # ~15 Hz group (min bound 10 Hz)
+        'PPO-10', 'TARC-4',     # ~10 Hz group (min bound 7.5 Hz)
+        'PPO-7.5', 'TARC-5',   # ~7.5 Hz group (min bound 6 Hz)
+        'TARC-10',               # lowest freq, no direct baseline (min bound 3 Hz)
     ]
-    
+
     comp_agents = [
-        'PPO-30', 
-        'PPO-15', 
-        'PPO-10', 'TARC-3', 
-        'PPO-7.5', 'TARC-4', 
-        'TARC-5', 
-        'TARC-10'
+        'PPO-15', 'TARC-3',
+        'PPO-10', 'TARC-4',
+        'PPO-7.5', 'TARC-5',
+        'TARC-10',
     ]
     sim_data_comp = load_sim_data_from_json(json_path, target_agents)
-    
+
     comp_pen_rm, comp_pen_rs, comp_unpen_rm, comp_unpen_rs, comp_fm, comp_fs = sim_data_comp
-    
-    comp_min_freqs = [30, 15, 10, 10, 7.5, 7.5, 6, 3]
-    
+
+    # Only TARC agents get a min-freq dashed line; PPO baselines use None
+    comp_min_freqs = [None, 10, None, 7.5, None, 6, 3]
+
     create_sim_comparison_plot(
         comp_agents,
         comp_pen_rm, comp_pen_rs,
