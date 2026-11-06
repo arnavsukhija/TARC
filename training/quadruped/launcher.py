@@ -32,7 +32,7 @@ go1_ppo_baselines = {
     'project_name': ["Go1_Stability_Rebuttal"],
     'seed': list(range(5)),
     'perturb': [1],
-    'base_dt_divisor': [1, 4, 5, 10], # 50Hz, 25Hz, 10Hz, 5Hz
+    'base_dt_divisor': [2.5, 3.0], # 50Hz, 25Hz, 10Hz, 5Hz
     'switch_cost_wrapper': [0],
 }
 

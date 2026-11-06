@@ -31,7 +31,10 @@ def main():
                         help='Directory containing policy_params_*.pkl files')
     parser.add_argument('--train_project', type=str, default='Go1_AutoLambda',
                         help='W&B project the policies were trained in')
-    parser.add_argument('--entity', type=str, default='arnavsukhija-eth-zuric')
+    parser.add_argument('--entity', type=str, default='arnavsukhija-eth-zurich')
+    parser.add_argument('--max_time_repeat', type=int, default=4)
+    parser.add_argument('--switch_cost', type=float, default=0.005)
+    parser.add_argument('--eval_project', type=str, default=None)
     args = parser.parse_args()
 
     pkl_files = sorted(glob.glob(os.path.join(args.policies_dir, 'policy_params_*.pkl')))
@@ -53,7 +56,9 @@ def main():
         except Exception as e:
             print(f'Could not fetch W&B config for {run_id}: {e}. Skipping.')
             continue
-
+        
+        if cfg.get('switch_cost') != args.switch_cost or cfg.get('max_time_repeat') != args.max_time_repeat:
+            continue
         print(f'Config: K_ratio={cfg.get("K_ratio")}, max_time_repeat={cfg.get("max_time_repeat")}, '
               f'seed={cfg.get("seed")}')
 
@@ -80,6 +85,7 @@ def main():
                 lambda_max=float(cfg.get('lambda_max', 1.0)),
                 policy_path=pkl_path,
                 wandb_run_id=run_id,
+                eval_project=args.eval_project,
             )
         except Exception:
             print(f'Error during rollout for {run_id}:')

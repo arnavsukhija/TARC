@@ -89,7 +89,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                time_as_part_of_state: bool = True,
                num_final_evals: int = 10,
                perturb: bool = False,
-               base_dt_divisor: int = 1,
+               base_dt_divisor: float = 1,
                # Auto-tuning lambda via dual gradient ascent on a constrained MDP.
                # Constraint: mean switches per episode <= K (per 1000 inner env steps).
                # Dual update: lambda_{k+1} = clip(lambda_k + alpha * (switch_rate - K_rate), 0, lambda_max)
@@ -101,6 +101,12 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                lambda_max: float = 1.0,
                policy_path: str = None,
                wandb_run_id: str = None,
+               eval_project: str = None,
+               dynamic_commands: bool = False,
+               command_change_steps: int = 250,
+               perturb_velocity_kick_max: float = None,
+               perturb_kick_wait_min: float = None,
+               perturb_kick_wait_max: float = None,
                ):
 
     env_cfg = registry.get_default_config(env_name)
@@ -117,6 +123,15 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
 
     if perturb:
         env_cfg.pert_config.enable = True
+        if perturb_velocity_kick_max is not None:
+            env_cfg.pert_config.velocity_kick[1] = perturb_velocity_kick_max
+        if perturb_kick_wait_min is not None:
+            env_cfg.pert_config.kick_wait_times[0] = perturb_kick_wait_min
+        if perturb_kick_wait_max is not None:
+            env_cfg.pert_config.kick_wait_times[1] = perturb_kick_wait_max
+        print(f"Perturbation config: velocity_kick={env_cfg.pert_config.velocity_kick}, "
+              f"kick_wait_times={env_cfg.pert_config.kick_wait_times}, "
+              f"kick_durations={env_cfg.pert_config.kick_durations}")
     
     # Apply base_dt_divisor to lower the control frequency for PPO baselines
     if base_dt_divisor > 1:
@@ -134,7 +149,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
     episode_length = ppo_config['episode_length']
     # Scale episode length to keep same physical simulation time across frequencies
     if base_dt_divisor > 1:
-        episode_length = episode_length // base_dt_divisor
+        episode_length = int(round(episode_length / base_dt_divisor))
         print(f"Adjusted episode_length = {episode_length} (same physical time: {episode_length * env_cfg.ctrl_dt:.1f}s)")
     learning_rate = ppo_config['learning_rate']
     max_grad_norm = ppo_config['max_grad_norm']
@@ -225,7 +240,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
         # Log to a separate eval project to avoid crowding the training runs.
         # Name the run after the original training run ID for traceability.
         wandb.init(
-            project=project_name + '_Eval',
+            project=project_name + '_Eval' if eval_project is None else eval_project,
             name=wandb_run_id,
             config={**config, 'train_run_id': wandb_run_id},
         )
@@ -425,6 +440,8 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
             env_steps = 0
             total_reward = 0.0
             disc_switch_sum = 0.0
+            last_cmd_change = 0
+            cmd_a = jnp.array(env_cfg.command_config.a)
             while env_steps < env_cfg.episode_length:
                 act_rng, rng = jax.random.split(rng)
                 ctrl, _ = jit_inference_fn(state.obs, act_rng)
@@ -435,6 +452,12 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                 # env_steps is T_k (elapsed inner steps when this switch fires)
                 disc_switch_sum += float(discount_factor ** env_steps)
                 env_steps += predicted_time
+                # Change command after the step so next jit_step embeds new command in obs
+                if dynamic_commands and (env_steps - last_cmd_change) >= command_change_steps:
+                    cmd_rng, rng = jax.random.split(rng)
+                    state.info["command"] = jax.random.uniform(
+                        cmd_rng, shape=(3,), minval=-cmd_a, maxval=cmd_a)
+                    last_cmd_change = env_steps
                 rews.append(
                     {k: v for k, v in state.metrics.items() if k.startswith("reward/")}
                 )
@@ -480,28 +503,52 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
             plt.ylabel('Hold duration (inner steps)')
             plt.title('Hold predictions')
             disc_switch_ratio = disc_switch_sum * (1 - discount_factor)
+            avg_ctrl_freq    = num_steps / (env_cfg.episode_length * env_cfg.ctrl_dt)
+            median_hold      = float(np.median(time_predictions))
+            median_ctrl_freq = 1.0 / (median_hold * env_cfg.ctrl_dt)
+            frac_min_hold    = float(sum(1 for t in time_predictions if t == min_time_repeat) / max(len(time_predictions), 1))
             wandb.log({
-                f'Results_{i}_random/Total reward':       total_reward,
-                f'Results_{i}_random/Number of actions':  num_steps,
-                f'Results_{i}_random/disc_switch_ratio':  disc_switch_ratio,
-                f'Results_{i}_random/K_ratio':            K_ratio,
-                f'Results_{i}_random/Command x_vel':      float(command[0]),
-                f'Results_{i}_random/Command y_vel':      float(command[1]),
-                f'Results_{i}_random/Command yaw_vel':    float(command[2]),
-                f'Results_{i}_random/Time Prediction Plot': wandb.Image(plt),
+                f'Results_{i}_random/Total reward':                   total_reward,
+                f'Results_{i}_random/Number of actions':              num_steps,
+                f'Results_{i}_random/Avg control frequency (Hz)':    avg_ctrl_freq,
+                f'Results_{i}_random/Median control frequency (Hz)': median_ctrl_freq,
+                f'Results_{i}_random/Frac max freq holds':           frac_min_hold,
+                f'Results_{i}_random/disc_switch_ratio':              disc_switch_ratio,
+                f'Results_{i}_random/K_ratio':                        K_ratio,
+                f'Results_{i}_random/Command x_vel':                  float(command[0]),
+                f'Results_{i}_random/Command y_vel':                  float(command[1]),
+                f'Results_{i}_random/Command yaw_vel':                float(command[2]),
+                f'Results_{i}_random/Time Prediction Plot':           wandb.Image(plt),
             })
             print(f"Command: x_vel={float(command[0]):.2f}, y_vel={float(command[1]):.2f}, yaw_vel={float(command[2]):.2f}")
-            print(f"The agent took {num_steps} actions | disc_switch_ratio={disc_switch_ratio:.4f} (K_ratio={K_ratio})")
+            print(f"The agent took {num_steps} actions | avg={avg_ctrl_freq:.1f} Hz | median={median_ctrl_freq:.1f} Hz | disc_switch_ratio={disc_switch_ratio:.4f}")
             print(f"Agent got {total_reward} reward")
     else:
-        # Enable perturbation in the eval env.
+        # Eval mode (policy_path is not None): 10 random-command rollouts matching
+        # the TARC eval protocol, logged under Results_{i}_random/* so the same
+        # plotting code can ingest baseline reward alongside TARC.
+        # Training-time mode: existing 3 fixed-command rollouts.
+        eval_mode = policy_path is not None
+
         env_cfg = registry.get_default_config(env_name)
+        if isinstance(env_cfg, dict):
+            env_cfg['impl'] = 'jax'
+        elif hasattr(env_cfg, 'impl'):
+            env_cfg.impl = 'jax'
+
+        if hasattr(env_cfg, 'sim_config'):
+            if hasattr(env_cfg.sim_config, dict):
+                env_cfg.sim_config['impl'] = 'jax'
+            elif hasattr(env_cfg.sim_config, 'impl'):
+                env_cfg.sim_config.impl = 'jax'
+
         env_cfg.pert_config.enable = perturb
-        env_cfg.command_config.a = [1.5, 0.8, 2 * jnp.pi]
-        if base_dt_divisor > 1:
+        if not eval_mode:
+            env_cfg.command_config.a = [1.5, 0.8, 2 * jnp.pi]
+        if base_dt_divisor > 1.0:
             env_cfg.ctrl_dt *= base_dt_divisor
             print(f"Lowering eval control frequency: new ctrl_dt = {env_cfg.ctrl_dt} ({1.0 / env_cfg.ctrl_dt:.2f} Hz)")
-            env_cfg.episode_length = env_cfg.episode_length // base_dt_divisor
+            env_cfg.episode_length = int(round(env_cfg.episode_length / base_dt_divisor))
             print(f"Adjusted episode_length = {env_cfg.episode_length} (same physical time: {env_cfg.episode_length * env_cfg.ctrl_dt:.1f}s)")
         eval_env = registry.load(env_name, config=env_cfg)
         env = go1_env
@@ -514,7 +561,7 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
         y_vel = 0.0  # @param {type: "number"}
         yaw_vel = 3.14  # @param {type: "number"}
 
-        seeds = [42,43,44]
+        seeds = list(range(10)) if eval_mode else [42, 43, 44]
         for i in seeds:
             rng = jax.random.PRNGKey(i)
             rollout = []
@@ -528,18 +575,29 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
             foot_vel = []
             rews = []
             contact = []
-            command = jnp.array([x_vel, y_vel, yaw_vel])
 
             state = jit_reset(rng)
-            state.info["command"] = command
+            if eval_mode:
+                command = state.info["command"]
+            else:
+                command = jnp.array([x_vel, y_vel, yaw_vel])
+                state.info["command"] = command
             num_steps = 0
             total_reward = 0
+            last_cmd_change = 0
+            cmd_a = jnp.array(env_cfg.command_config.a)
             while num_steps < env_cfg.episode_length:
                 act_rng, rng = jax.random.split(rng)
                 ctrl, _ = jit_inference_fn(state.obs, act_rng)
                 state = jit_step(state, ctrl)
                 num_steps += 1
-                state.info["command"] = command
+                if not eval_mode:
+                    state.info["command"] = command
+                elif dynamic_commands and (num_steps - last_cmd_change) >= command_change_steps:
+                    cmd_rng, rng = jax.random.split(rng)
+                    state.info["command"] = jax.random.uniform(
+                        cmd_rng, shape=(3,), minval=-cmd_a, maxval=cmd_a)
+                    last_cmd_change = num_steps
                 rews.append(
                     {k: v for k, v in state.metrics.items() if k.startswith("reward/")}
                 )
@@ -578,10 +636,21 @@ def experiment(env_name: str = 'Go1JoystickFlatTerrain',
                             / env_cfg.command_config.a[0],
                     )
                 )
-            avg_control_freq = num_steps / (episode_length * ctrl_dt)
-            wandb.log({f'Results_{i}/Total reward ': total_reward})
-            wandb.log({f'Results_{i}/Number of actions': num_steps})
-            wandb.log({f'Results_{i}/Avg control frequency (Hz)': avg_control_freq})
+            avg_control_freq = num_steps / (env_cfg.episode_length * env_cfg.ctrl_dt)
+            if eval_mode:
+                wandb.log({
+                    f'Results_{i}_random/Total reward':                   float(total_reward),
+                    f'Results_{i}_random/Number of actions':              num_steps,
+                    f'Results_{i}_random/Avg control frequency (Hz)':    avg_control_freq,
+                    f'Results_{i}_random/Median control frequency (Hz)': avg_control_freq,
+                    f'Results_{i}_random/Command x_vel':                  float(command[0]),
+                    f'Results_{i}_random/Command y_vel':                  float(command[1]),
+                    f'Results_{i}_random/Command yaw_vel':                float(command[2]),
+                })
+            else:
+                wandb.log({f'Results_{i}/Total reward ': total_reward})
+                wandb.log({f'Results_{i}/Number of actions': num_steps})
+                wandb.log({f'Results_{i}/Avg control frequency (Hz)': avg_control_freq})
             print(f"Agent got {total_reward} reward at avg {avg_control_freq:.1f} Hz ({num_steps} actions)")
 
     wandb.finish()
@@ -609,6 +678,12 @@ def main(args):
                lambda_max=args.lambda_max,
                policy_path=args.policy_path,
                wandb_run_id=args.wandb_run_id,
+               eval_project=args.eval_project,
+               dynamic_commands=bool(args.dynamic_commands),
+               command_change_steps=args.command_change_steps,
+               perturb_velocity_kick_max=args.perturb_velocity_kick_max,
+               perturb_kick_wait_min=args.perturb_kick_wait_min,
+               perturb_kick_wait_max=args.perturb_kick_wait_max,
                )
 
 
@@ -626,7 +701,7 @@ if __name__ == '__main__':
     parser.add_argument('--time_as_part_of_state', type=int, default=1)
     parser.add_argument('--num_final_evals', type=int, default=10)
     parser.add_argument('--perturb', type=int, default=0)
-    parser.add_argument('--base_dt_divisor', type=int, default=1)
+    parser.add_argument('--base_dt_divisor', type=float, default=1)
     parser.add_argument('--use_auto_lambda', type=int, default=0)
     parser.add_argument('--K_ratio', type=float, default=0.3)
     parser.add_argument('--alpha_lambda', type=float, default=0.05)
@@ -637,5 +712,19 @@ if __name__ == '__main__':
                         help='Path to a saved policy pkl file. If given, skips training.')
     parser.add_argument('--wandb_run_id', type=str, default=None,
                         help='W&B run ID to resume when loading a policy (eval-only mode).')
+    parser.add_argument('--eval_project', type=str, default=None,
+                        help='W&B project for eval-only mode (defaults to training project with _Eval suffix)')
+    parser.add_argument('--num_timesteps', type=int, default=None,
+                        help='Training timesteps (ignored in eval-only mode; accepted for launcher compatibility).')
+    parser.add_argument('--dynamic_commands', type=int, default=0,
+                        help='If 1, resample the joystick command every --command_change_steps inner steps.')
+    parser.add_argument('--command_change_steps', type=int, default=250,
+                        help='Inner steps between command resamples when --dynamic_commands=1.')
+    parser.add_argument('--perturb_velocity_kick_max', type=float, default=None,
+                        help='Override max velocity kick magnitude (m/s); default env value is 3.0.')
+    parser.add_argument('--perturb_kick_wait_min', type=float, default=None,
+                        help='Override min wait time between kicks (s); default env value is 1.0.')
+    parser.add_argument('--perturb_kick_wait_max', type=float, default=None,
+                        help='Override max wait time between kicks (s); default env value is 3.0.')
     args = parser.parse_args()
     main(args)
