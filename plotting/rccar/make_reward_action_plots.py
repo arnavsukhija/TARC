@@ -1,3 +1,4 @@
+import argparse
 import json
 
 import wandb
@@ -5,7 +6,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import scienceplots
+import scienceplots  # noqa: F401
+from tueplots import bundles
 
 
 base_control_frequency = {
@@ -109,65 +111,116 @@ def create_rc_car_combined_plot(agent_names, pen_reward_means, pen_reward_stds,
     print(f"--- Final plot saved as: {output_filename} ---")
 
 
-def create_tarc_sim_vs_hw_plot(agent_names, sim_data, hw_data, min_freqs):
-    """
-    MODIFIED: Uses a consistent color for 'Sim' and 'Hardware' across all three subplots.
-    """
-    print("\n--- Generating Sim-vs-Hardware TARC results plot with consistent colors... ---")
+def create_hw_only_plot(agent_names, hw_data, min_freqs, tarc_only=False):
+    """Hardware-only 1x3 results plot (penalized reward, unpenalized reward, avg frequency)."""
+    print("\n--- Generating hardware-only RC Car results plot... ---")
     plt.style.use(['science', 'ieee'])
-    fig, axes = plt.subplots(1, 3, figsize=(7.16, 2.5))
-    colors = sns.color_palette("colorblind")
+    fig, axes = plt.subplots(1, 2, figsize=(7.16, 2.5))
 
-    # --- NEW: Define consistent colors for Sim and Hardware ---
-    sim_color = colors[0]  # Blue for Sim
-    hw_color = colors[1]  # Orange for Hardware
-
+    colors = sns.color_palette('colorblind', n_colors=len(agent_names))
     x = np.arange(len(agent_names))
-    bar_width = 0.35
+    bar_width = 0.6
 
-    sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs = sim_data
     hw_pen_rm, hw_pen_rs, hw_unpen_rm, hw_unpen_rs, hw_fm, hw_fs = hw_data
 
-    # Plot 1: Penalized Reward - uses consistent colors
-    axes[0].bar(x - bar_width / 2, sim_pen_rm, bar_width, yerr=sim_pen_rs, label='RC Car (Simulation)', capsize=3, color=sim_color)
-    axes[0].bar(x + bar_width / 2, hw_pen_rm, bar_width, yerr=hw_pen_rs, label='RC Car (Hardware)', capsize=3, color=hw_color)
-    axes[0].set_title('(a) Penalized Reward')
-    axes[0].set_ylabel('Total Reward')
+    specs = [
+        (hw_unpen_rm, hw_unpen_rs, '(a) Performance Comparison',    'Task Performance'),
+        (hw_fm,       hw_fs,       '(b) Avg. Control Frequency', 'Frequency (Hz)'),
+    ]
+    for ax, (means, errs, title, ylabel) in zip(axes, specs):
+        ax.bar(x, means, bar_width, yerr=errs, capsize=3, color=colors,
+               error_kw={'elinewidth': 0.8})
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=45, ha='right')
+        y_min, y_max = ax.get_ylim()
+        ax.set_ylim(bottom=0, top=y_max * 1.15)
 
-    # Plot 2: Unpenalized Reward - uses consistent colors
-    axes[1].bar(x - bar_width / 2, sim_unpen_rm, bar_width, yerr=sim_unpen_rs, label='RC Car (Simulation)', capsize=3, color=sim_color)
-    axes[1].bar(x + bar_width / 2, hw_unpen_rm, bar_width, yerr=hw_unpen_rs, label='RC Car (Hardware)', capsize=3,
-                color=hw_color)
-    axes[1].set_title('(b) Unpenalized Reward')
-
-    # Plot 3: Average Control Frequency - uses consistent colors
-    axes[2].bar(x - bar_width / 2, sim_fm, bar_width, yerr=sim_fs, label='RC Car (Simulation)', capsize=3, color=sim_color)
-    axes[2].bar(x + bar_width / 2, hw_fm, bar_width, yerr=hw_fs, label='RC Car (Hardware)', capsize=3, color=hw_color)
     for i, agent_name in enumerate(agent_names):
         if agent_name != 'Baseline':
-            axes[2].hlines(y=min_freqs[i], xmin=i - bar_width, xmax=i + bar_width,
+            axes[1].hlines(y=min_freqs[i],
+                           xmin=x[i] - bar_width / 2, xmax=x[i] + bar_width / 2,
                            colors='black', linestyles='dashed', lw=1.5)
-    axes[2].set_title('(c) Avg. Control Frequency')
-    axes[2].set_ylabel('Frequency (Hz)')
 
-    handles, labels = axes[0].get_legend_handles_labels()
     from matplotlib.lines import Line2D
     dashed_line = Line2D([0], [0], color='black', lw=1.5, linestyle='--', label='Frequency Lower Bound')
-    handles.append(dashed_line)
-    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=3, frameon=False)
+    fig.legend(handles=[dashed_line], loc='upper center', bbox_to_anchor=(0.5, 1.03),
+               ncol=1, frameon=False)
 
-    # Global Formatting
-    for ax in axes:
-        ax.set_xticks(x)
-        ax.set_xticklabels(agent_names, rotation=45, ha="right")
-        y_min, y_max = ax.get_ylim()
-        ax.set_ylim(bottom=0, top=y_max * 1.1)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
 
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-
-    output_filename = 'RC_Car_TARC_SimVsHardware_Results.pdf'
-    plt.savefig(output_filename)
+    suffix = '_tarc_only' if tarc_only else ''
+    output_filename = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   f'RC_Car_Hardware_Results{suffix}.pdf')
+    plt.savefig(output_filename, bbox_inches='tight')
+    plt.savefig(output_filename.replace('.pdf', '.png'), dpi=300, bbox_inches='tight')
     print(f"--- Final plot saved as: {output_filename} ---")
+
+
+def create_tarc_sim_vs_hw_plot(agent_names, sim_data, hw_data, min_freqs, tarc_only=False,
+                               no_latex=False):
+    """Sim-vs-Hardware comparison in NeurIPS style."""
+    print("\n--- Generating Sim-vs-Hardware TARC results plot... ---")
+    rc = bundles.neurips2024()
+    if no_latex:
+        rc.pop('text.latex.preamble', None)
+        rc['text.usetex'] = False
+    plt.rcParams.update(rc)
+
+    colors    = sns.color_palette('colorblind')
+    sim_color = colors[0]
+    hw_color  = colors[1]
+
+    x        = np.arange(len(agent_names))
+    bar_width = 0.32
+    ekw      = {'elinewidth': 0.7, 'markeredgewidth': 0.7, 'ecolor': 'black'}
+
+    sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs = sim_data
+    hw_pen_rm,  hw_pen_rs,  hw_unpen_rm,  hw_unpen_rs,  hw_fm,  hw_fs  = hw_data
+
+    fig, axes = plt.subplots(1, 2, figsize=(4.8, 2.4))
+
+    specs = [
+        (sim_unpen_rm, sim_unpen_rs,  hw_unpen_rm, hw_unpen_rs,
+         '(a) Task Performance',       'Total Reward'),
+        (sim_fm,       sim_fs,        hw_fm,       hw_fs,
+         '(b) Avg. Control Frequency', 'Frequency (Hz) $\\downarrow$ better'),
+    ]
+    for ax, (sm, ss, hm, hs, title, ylabel) in zip(axes, specs):
+        ax.bar(x - bar_width / 2, sm, bar_width, yerr=ss, label='Simulation',
+               capsize=2, color=sim_color, error_kw=ekw, zorder=3)
+        ax.bar(x + bar_width / 2, hm, bar_width, yerr=hs, label='Hardware',
+               capsize=2, color=hw_color,  error_kw=ekw, zorder=3)
+        ax.set_title(title, fontweight='bold')
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=30, ha='right')
+        ax.grid(True, axis='y', alpha=0.35, lw=0.5, zorder=0)
+        ax.set_axisbelow(True)
+        y_lo, y_hi = ax.get_ylim()
+        ax.set_ylim(bottom=min(0, y_lo), top=y_hi * 1.15)
+
+    for i, agent_name in enumerate(agent_names):
+        if agent_name != 'Baseline':
+            axes[1].hlines(min_freqs[i], i - bar_width, i + bar_width,
+                           colors='black', linestyles='dashed', lw=0.9, zorder=4)
+
+    from matplotlib.lines import Line2D
+    handles, labels = axes[0].get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color='black', lw=0.9, ls='--', label='Min. freq. (TARC)'))
+    lfs = plt.rcParams.get('legend.fontsize', 7)
+    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 1.03),
+               ncol=3, frameon=False, fontsize=lfs)
+    fig.tight_layout(rect=[0, 0, 1, 0.9])
+
+    import os as _os
+    suffix = '_tarc_only' if tarc_only else ''
+    out = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                        f'RC_Car_TARC_SimVsHardware_Results{suffix}.pdf')
+    fig.savefig(out, bbox_inches='tight')
+    fig.savefig(out.replace('.pdf', '.png'), dpi=300, bbox_inches='tight')
+    print(f"--- Final plot saved as: {out} ---")
 
 def load_sim_data_from_json(filename, agent_names):
     import os
@@ -194,14 +247,19 @@ def load_sim_data_from_json(filename, agent_names):
 
     return sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs
     
-def create_sim_comparison_plot(agent_names, sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs, sim_fm, sim_fs, min_freqs):
+def create_sim_comparison_plot(agent_names, sim_pen_rm, sim_pen_rs, sim_unpen_rm, sim_unpen_rs,
+                               sim_fm, sim_fs, min_freqs, no_latex=False):
+    """Sim low-freq comparison in NeurIPS style."""
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
-    print("\\n--- Generating Sim-only comparison plot... ---")
-    plt.style.use(['science', 'ieee'])
-    fig, axes = plt.subplots(1, 3, figsize=(8.5, 3.5))
+    print("\n--- Generating Sim-only comparison plot... ---")
+    rc = bundles.neurips2024()
+    if no_latex:
+        rc.pop('text.latex.preamble', None)
+        rc['text.usetex'] = False
+    plt.rcParams.update(rc)
 
-    base_colors = sns.color_palette("colorblind")
+    base_colors = sns.color_palette('colorblind')
     colors = []
     for name in agent_names:
         if 'PPO-30' in name or name == 'Baseline':
@@ -213,108 +271,102 @@ def create_sim_comparison_plot(agent_names, sim_pen_rm, sim_pen_rs, sim_unpen_rm
         else:
             colors.append('gray')
 
-    x = np.arange(len(agent_names))
-    bar_width = 0.6
+    x        = np.arange(len(agent_names))
+    bw       = 0.5
+    ekw      = {'elinewidth': 0.7, 'markeredgewidth': 0.7, 'ecolor': 'black'}
 
-    # Plot 1: Penalized Reward
-    axes[0].bar(x, sim_pen_rm, bar_width, yerr=sim_pen_rs, capsize=3, color=colors)
-    axes[0].set_title('(a) Penalized Reward')
-    axes[0].set_ylabel('Total Reward')
+    fig, axes = plt.subplots(1, 3, figsize=(7.16, 2.4))
 
-    # Plot 2: Unpenalized Reward
-    axes[1].bar(x, sim_unpen_rm, bar_width, yerr=sim_unpen_rs, capsize=3, color=colors)
-    axes[1].set_title('(b) Unpenalized Reward')
+    specs = [
+        (sim_pen_rm,   sim_pen_rs,   '(a) Penalized Reward',        'Total Reward'),
+        (sim_unpen_rm, sim_unpen_rs, '(b) Unpenalized Reward',      'Total Reward'),
+        (sim_fm,       sim_fs,       '(c) Avg. Control Frequency',  'Frequency (Hz) $\\downarrow$ better'),
+    ]
+    for ax, (means, errs, title, ylabel) in zip(axes, specs):
+        ax.bar(x, means, bw, yerr=errs, capsize=2, color=colors, error_kw=ekw, zorder=3)
+        ax.set_title(title, fontweight='bold')
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels(agent_names, rotation=30, ha='right')
+        ax.grid(True, axis='y', alpha=0.35, lw=0.5, zorder=0)
+        ax.set_axisbelow(True)
+        y_lo, y_hi = ax.get_ylim()
+        ax.set_ylim(bottom=min(0, y_lo), top=y_hi * 1.15)
 
-    # Plot 3: Average Control Frequency
-    axes[2].bar(x, sim_fm, bar_width, yerr=sim_fs, capsize=3, color=colors)
     for i, agent_name in enumerate(agent_names):
         if min_freqs and i < len(min_freqs) and min_freqs[i] is not None:
-            axes[2].hlines(y=min_freqs[i], xmin=i - bar_width/2, xmax=i + bar_width/2,
-                           colors='black', linestyles='dashed', lw=1.5)
-    axes[2].set_title('(c) Avg. Control Frequency')
-    axes[2].set_ylabel('Frequency (Hz)')
+            axes[2].hlines(min_freqs[i], i - bw / 2, i + bw / 2,
+                           colors='black', linestyles='dashed', lw=0.9, zorder=4)
 
-    # Global Formatting
-    for ax in axes:
-        ax.set_xticks(x)
-        ax.set_xticklabels(agent_names, rotation=45, ha="right", fontsize=9)
-        y_min, y_max = ax.get_ylim()
-        ax.set_ylim(bottom=min(0, y_min), top=y_max * 1.15)
-
+    lfs = plt.rcParams.get('legend.fontsize', 7)
     custom_lines = [
-        Patch(facecolor='gray', label='High-Freq Baseline (Fixed)'),
-        Patch(facecolor=base_colors[0], label='Low-Freq Baseline (Fixed)'),
-        Patch(facecolor=base_colors[1], label='TARC (Adaptive)'),
-        Line2D([0], [0], color='black', lw=1.5, linestyle='--', label='Min Freq Bound')
+        Patch(facecolor='gray',          label='High-Freq Baseline'),
+        Patch(facecolor=base_colors[0],  label='Low-Freq Baseline'),
+        Patch(facecolor=base_colors[1],  label='TARC (Adaptive)'),
+        Line2D([0], [0], color='black', lw=0.9, ls='--', label='Min. freq. (TARC)'),
     ]
-    fig.legend(handles=custom_lines, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False, fontsize=10)
-
+    fig.legend(handles=custom_lines, loc='upper center', bbox_to_anchor=(0.5, 1.03),
+               ncol=4, frameon=False, fontsize=lfs)
     fig.tight_layout(rect=[0, 0, 1, 0.9])
 
     import os as _os
-    output_filename = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'RC_Car_Sim_LowFreq_Comparison.pdf')
-    plt.savefig(output_filename)
-    plt.savefig(output_filename.replace('.pdf', '.png'), dpi=300)
-    print(f"--- Final plot saved as: {output_filename} ---")
+    out = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'RC_Car_Sim_LowFreq_Comparison.pdf')
+    fig.savefig(out, bbox_inches='tight')
+    fig.savefig(out.replace('.pdf', '.png'), dpi=300, bbox_inches='tight')
+    print(f"--- Final plot saved as: {out} ---")
 
 # --- 3. Main Execution Block ---
 if __name__ == '__main__':
-    agent_names = ['Baseline', 'TARC-4']  # We want TARC-4 here
-    # TARC-4 was max_time_repeat=3, which is 10Hz.
-    
-    wandb_tags = ['ppo', 'hardware_4actions']
-    minimum_frequencies = [30, 7.5]
+    import os
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--tarc_only', action='store_true',
+                        help='Show only Baseline (PPO-30Hz) and TARC-4; default shows all TARC variants')
+    parser.add_argument('--no_latex', action='store_true',
+                        help='Disable LaTeX rendering (for quick preview)')
+    args = parser.parse_args()
+
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RCCar_simulation_results.json')
+
+    if args.tarc_only:
+        agent_names       = ['Baseline', 'TARC']
+        wandb_tags        = ['ppo', 'hardware_4actions']
+        minimum_frequencies = [30, 7.5]
+    else:
+        agent_names       = ['Baseline', 'TARC-4', 'TARC-5', 'TARC-10']
+        wandb_tags        = ['ppo', 'hardware_4actions', 'tacos5_hardware', 'tacos10_hardware']
+        minimum_frequencies = [30, 7.5, 6, 3]
 
     mean_pen_rewards, std_pen_rewards, _, _ = get_rc_car_data(wandb_tags, penalize=True, switch_cost=0.1)
     mean_unpen_rewards, std_unpen_rewards, mean_frequencies, std_frequencies = get_rc_car_data(wandb_tags, penalize=False, switch_cost=0.1)
     hw_data = (mean_pen_rewards, std_pen_rewards, mean_unpen_rewards, std_unpen_rewards, mean_frequencies, std_frequencies)
 
-    # Make sure we read from the absolute path or locally
-    import os
-    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'RCCar_simulation_results.json')
-    sim_data = load_sim_data_from_json(json_path, agent_names)
-    create_tarc_sim_vs_hw_plot(agent_names, sim_data, hw_data, minimum_frequencies)
-    create_rc_car_combined_plot(
-        agent_names=['Baseline', 'TARC'], # HW names
-        pen_reward_means=mean_pen_rewards,
-        pen_reward_stds=std_pen_rewards,
-        unpen_reward_means=mean_unpen_rewards,
-        unpen_reward_stds=std_unpen_rewards,
-        freq_means=mean_frequencies,
-        freq_stds=std_frequencies,
-        min_freqs=minimum_frequencies
-    )
-    
-    # === SIM-ONLY COMPARISON PLOT ===
-    # Low-freq baselines placed next to matching TARC variant by actual operating frequency:
-    #   TARC-3 ~15 Hz  → paired with PPO-15
-    #   TARC-4 ~10 Hz  → paired with PPO-10
-    #   TARC-5 ~7.5 Hz → paired with PPO-7.5
-    # RC car base freq = 30 Hz; TARC-N min bound = 30/N Hz
-    target_agents = [
-        'PPO-15', 'TARC-3',     # ~15 Hz group (min bound 10 Hz)
-        'PPO-10', 'TARC-4',     # ~10 Hz group (min bound 7.5 Hz)
-        'PPO-7.5', 'TARC-5',   # ~7.5 Hz group (min bound 6 Hz)
-        'TARC-10',               # lowest freq, no direct baseline (min bound 3 Hz)
-    ]
+    create_hw_only_plot(agent_names, hw_data, minimum_frequencies, tarc_only=args.tarc_only)
 
-    comp_agents = [
-        'PPO-15', 'TARC-3',
-        'PPO-10', 'TARC-4',
-        'PPO-7.5', 'TARC-5',
-        'TARC-10',
-    ]
-    sim_data_comp = load_sim_data_from_json(json_path, target_agents)
+    # === SIM-VS-HW COMPARISON PLOT ===
+    sim_data_hw = load_sim_data_from_json(json_path, agent_names)
+    create_tarc_sim_vs_hw_plot(agent_names, sim_data_hw, hw_data, minimum_frequencies,
+                               tarc_only=args.tarc_only, no_latex=args.no_latex)
 
+    # === SIM-ONLY COMPARISON PLOT (all TARC variants vs low-freq PPO baselines) ===
+    if args.tarc_only:
+        comp_agents    = ['PPO-10', 'TARC-4']
+        comp_min_freqs = [None, 7.5]
+    else:
+        comp_agents = [
+            'PPO-10', 'TARC-4',
+            'PPO-7.5', 'TARC-5',
+            'TARC-10',
+        ]
+        comp_min_freqs = [None, 7.5, None, 6, 3]
+
+    sim_data_comp = load_sim_data_from_json(json_path, comp_agents)
     comp_pen_rm, comp_pen_rs, comp_unpen_rm, comp_unpen_rs, comp_fm, comp_fs = sim_data_comp
-
-    # Only TARC agents get a min-freq dashed line; PPO baselines use None
-    comp_min_freqs = [None, 10, None, 7.5, None, 6, 3]
-
     create_sim_comparison_plot(
         comp_agents,
         comp_pen_rm, comp_pen_rs,
         comp_unpen_rm, comp_unpen_rs,
         comp_fm, comp_fs,
-        comp_min_freqs
+        comp_min_freqs,
+        no_latex=args.no_latex,
     )

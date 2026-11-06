@@ -17,14 +17,14 @@ plt.style.use(['science', 'ieee'])
 
 # ── Shared constants ───────────────────────────────────────────────────────
 EVAL_SEEDS   = [42, 43, 44]
-TARC_NAMES   = {3: 'TARC-3', 4: 'TARC-4', 5: 'TARC-5', 10: 'TARC-10'}
+TARC_NAMES   = {4: 'TARC-4', 5: 'TARC-5', 10: 'TARC-10'}
 MTRS         = sorted(TARC_NAMES.keys())
 base_colors  = sns.color_palette("colorblind")
 COLORS       = {mtr: base_colors[i] for i, mtr in enumerate(MTRS)}
 
 RC_SWITCH_COSTS = [0.01, 0.05, 0.1, 0.2, 0.5]
-RC_MIN_FREQS    = {3: 10.0, 4: 7.5, 5: 6.0, 10: 3.0}   # 30 / N
-GO1_MIN_FREQS   = {3: 50/3, 4: 12.5, 5: 10.0, 10: 5.0}  # 50 / N
+RC_MIN_FREQS    = {4: 7.5, 5: 6.0, 10: 3.0}   # 30 / N
+GO1_MIN_FREQS   = {4: 12.5, 5: 10.0, 10: 5.0}  # 50 / N
 
 
 # ── Data fetchers ──────────────────────────────────────────────────────────

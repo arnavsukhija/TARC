@@ -8,14 +8,13 @@ from collections import defaultdict
 
 # Maps max_time_repeat -> TARC agent name
 TARC_NAMES = {
-    3: 'TARC-3',
     4: 'TARC-4',
     5: 'TARC-5',
     10: 'TARC-10',
 }
 
 # The physical minimum frequency = 30 / max_time_repeat
-MIN_FREQS = {3: 10.0, 4: 7.5, 5: 6.0, 10: 3.0}
+MIN_FREQS = {4: 7.5, 5: 6.0, 10: 3.0}
 
 SWITCH_COSTS = [0.01, 0.05, 0.1, 0.2, 0.5]
 N_EVAL = 9  # results/total_reward_0 ... results/total_reward_8

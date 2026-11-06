@@ -1,12 +1,12 @@
-"""Plot K_ratio (target) vs realised disc_switch_ratio for Go1 TARC-{5,10}.
+"""Plot K_ratio (target) vs realised disc_switch_ratio for Go1 TARC-5.
 
-Pulls eval-project runs from W&B (Go1_AutoLambda_Eval), groups by
-(K_ratio, max_time_repeat), and aggregates over (training seeds x eval seeds)
-to produce mean +/- standard-error curves.
+Pulls eval runs from W&B, groups by K_ratio, and aggregates over
+(training seeds x eval seeds) to produce mean +/- standard-error curves.
+
+TARC-5 evals live in the dedicated eval project Go1_AutoLambda_Eval.
 
 X-axis: K_ratio (target discounted switch ratio).
-Y-axis: realised disc_switch_ratio averaged over rollouts.
-One curve per max_time_repeat (TARC-5, TARC-10).
+Y-axis: (a) realised disc_switch_ratio, (b) total reward.
 """
 
 import os
@@ -20,11 +20,38 @@ import wandb
 
 
 ENTITY = 'arnavsukhija-eth-zurich'
-PROJECT = 'Go1_AutoLambda_Eval'
 
-MAX_TIME_REPEATS = [5, 10]
-TARC_NAMES = {5: 'TARC-5', 10: 'TARC-10'}
+# (project, list of max_time_repeats to take from this project)
+SOURCES = [
+    ('Go1_AutoLambda_Eval', [5]),
+]
+
+# Baseline (non-TARC) PPO eval — 200M-step MuJoCo Playground default, the variant
+# deployed on hardware. Fixed 50 Hz, no K_ratio.
+#
+# NOTE: eval-mode runs in training_go1.py mis-log num_timesteps (the *3 multiplier
+# at line ~151 always fires), so the eval-project config can't be trusted for that
+# field. We resolve each eval back to its original training run via the
+# `train_run_id` field and filter on the TRAINING project's config.
+BASELINE_EVAL_PROJECT = 'Go1_Stability_Rebuttal_Eval'
+BASELINE_TRAIN_PROJECT = 'Go1_Stability_Rebuttal'
+BASELINE_LABEL = 'PPO-50Hz'
+BASELINE_REQUIRE = {
+    'switch_cost_wrapper': False,
+    'num_timesteps': 200_000_000,
+    'control_frequency_hz': 50.0,
+}
+
+MAX_TIME_REPEATS = [5]
+TARC_NAMES = {5: 'TARC'}
 N_EVAL_ROLLOUTS = 10  # Results_0_random ... Results_9_random
+
+# Optional per-mtr K_ratio whitelist. None means accept all K_ratios for that mtr.
+# TARC-4 is restricted because K=0.3 forces it to its max frequency (3.0 Hz),
+# which leaves no actuation budget and tanks performance.
+K_RATIO_WHITELIST = {
+    5: {0.3, 0.4, 0.6, 0.7},
+}
 
 
 METRICS = {
@@ -40,32 +67,104 @@ def fetch_eval_data():
     runs (5 training seeds * 10 rollouts = 50 samples per cell).
     """
     api = wandb.Api()
-    runs = api.runs(f'{ENTITY}/{PROJECT}')
-
     samples = {m: defaultdict(list) for m in METRICS}
-    for run in runs:
-        cfg = run.config
-        K_ratio = cfg.get('K_ratio')
-        mtr = cfg.get('max_time_repeat')
-        if K_ratio is None or mtr is None:
-            continue
-        if int(mtr) not in MAX_TIME_REPEATS:
-            continue
 
+    for project, allowed_mtrs in SOURCES:
+        print(f'  fetching from {ENTITY}/{project} (mtr in {allowed_mtrs}) ...')
+        runs = api.runs(f'{ENTITY}/{project}')
+        for run in runs:
+            cfg = run.config
+            K_ratio = cfg.get('K_ratio')
+            mtr = cfg.get('max_time_repeat')
+            if K_ratio is None or mtr is None:
+                continue
+            if int(mtr) not in allowed_mtrs:
+                continue
+
+            whitelist = K_RATIO_WHITELIST.get(int(mtr))
+            if whitelist is not None and round(float(K_ratio), 6) not in {round(k, 6) for k in whitelist}:
+                continue
+
+            try:
+                summary = run.summary._json_dict
+            except Exception:
+                summary = dict(run.summary)
+
+            cell = (float(K_ratio), int(mtr))
+            for i in range(N_EVAL_ROLLOUTS):
+                for metric, key_tmpl in METRICS.items():
+                    val = summary.get(key_tmpl.format(i=i))
+                    if val is None:
+                        continue
+                    samples[metric][cell].append(float(val))
+
+    return samples
+
+
+def fetch_baseline_rewards():
+    """Return a flat list of Results_{i}_random/Total reward for matching baseline runs.
+
+    The eval project's config is unreliable here: training_go1.py multiplies
+    num_timesteps by 3 unconditionally, so eval-mode runs always log 600M
+    even for 200M policies. We therefore drive the filter from the *training*
+    project (Go1_Stability_Rebuttal), collect the wandb run-IDs that match the
+    baseline config, and then pick eval runs whose display name matches one
+    of those IDs (training_go1.py sets name=wandb_run_id when creating the
+    eval run, so it equals the training run's wandb id).
+    """
+    api = wandb.Api()
+
+    print(f'  scanning {ENTITY}/{BASELINE_TRAIN_PROJECT} for baseline training runs ...')
+    try:
+        train_runs = list(api.runs(f'{ENTITY}/{BASELINE_TRAIN_PROJECT}'))
+    except Exception as e:
+        print(f'  could not fetch training runs: {e}')
+        return []
+
+    matching_train_ids = set()
+    for tr in train_runs:
+        cfg = tr.config
+        if all(cfg.get(k) == v for k, v in BASELINE_REQUIRE.items()):
+            matching_train_ids.add(tr.id)
+    print(f'    {len(matching_train_ids)} training runs match baseline filter '
+          f'({BASELINE_REQUIRE})')
+    if not matching_train_ids:
+        return []
+
+    print(f'  pulling rewards from {ENTITY}/{BASELINE_EVAL_PROJECT} ...')
+    try:
+        eval_runs = list(api.runs(f'{ENTITY}/{BASELINE_EVAL_PROJECT}'))
+    except Exception as e:
+        print(f'  could not fetch eval runs: {e}')
+        return []
+
+    rewards = []
+    matched_train_ids = set()
+    for run in eval_runs:
+        # training_go1.py:229 sets name=wandb_run_id, so run.name == training run's wandb id.
+        train_id = run.name
+        if train_id not in matching_train_ids:
+            continue
         try:
             summary = run.summary._json_dict
         except Exception:
             summary = dict(run.summary)
-
-        cell = (float(K_ratio), int(mtr))
+        added = 0
         for i in range(N_EVAL_ROLLOUTS):
-            for metric, key_tmpl in METRICS.items():
-                val = summary.get(key_tmpl.format(i=i))
-                if val is None:
-                    continue
-                samples[metric][cell].append(float(val))
+            val = summary.get(f'Results_{i}_random/Total reward')
+            if val is None:
+                continue
+            rewards.append(float(val))
+            added += 1
+        if added:
+            matched_train_ids.add(train_id)
 
-    return samples
+    missing = matching_train_ids - matched_train_ids
+    if missing:
+        print(f'    {len(missing)} matching training runs had no eval run yet '
+              f'(first few: {list(sorted(missing))[:5]})')
+    print(f'    {len(matched_train_ids)} eval runs matched, {len(rewards)} reward samples')
+    return rewards
 
 
 def aggregate(metric_samples):
@@ -101,33 +200,59 @@ def _plot_curves(ax, agg, color_map, ylabel, title, identity=False):
         ax.plot(ks, means, marker='o', lw=1.2, color=color, label=TARC_NAMES[mtr])
         ax.fill_between(ks, means - sems, means + sems, alpha=0.2, color=color)
 
-    ax.set_xlabel(r'Target discounted switch ratio $K$')
+    ax.set_xlabel(r'Target discounted query ratio $K$')
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.grid(True, alpha=0.3, lw=0.4)
 
 
-def create_plot(agg_switch, agg_reward):
+def _overlay_baseline(ax, rewards):
+    if not rewards:
+        return
+    arr = np.asarray(rewards, dtype=float)
+    mean = float(np.mean(arr))
+    sem = float(np.std(arr, ddof=1) / np.sqrt(len(arr))) if len(arr) > 1 else 0.0
+    lo, hi = ax.get_xlim()
+    ax.axhspan(mean - sem, mean + sem, color='gray', alpha=0.15, zorder=0)
+    ax.axhline(mean, color='black', lw=1.0, linestyle='--', alpha=0.8,
+               label=f'{BASELINE_LABEL} (no querying constraint, $K=1$)')
+    ax.set_xlim(lo, hi)
+    print(f'\n=== Baseline overlay ===\n{BASELINE_LABEL}: n={len(arr)}  '
+          f'mean={mean:.4f}  sem={sem:.4f}')
+
+
+def create_plot(agg_switch, agg_reward, baseline_rewards):
     plt.style.use(['science', 'no-latex'])
     base_colors = sns.color_palette("colorblind")
-    color_map = {5: base_colors[1], 10: base_colors[2]}
+    color_map = {5: base_colors[0]}
 
-    fig, axes = plt.subplots(1, 2, figsize=(6.6, 2.6))
+    # CoRL single-column text width ≈ 5.5 in (NeurIPS-style template)
+    fig, axes = plt.subplots(1, 2, figsize=(5.5, 2.4))
 
     _plot_curves(axes[0], agg_switch, color_map,
-                 ylabel=r'Realised discounted switch ratio',
+                 ylabel=r'Realised discounted query ratio',
                  title='(a) Constraint satisfaction',
                  identity=True)
     _plot_curves(axes[1], agg_reward, color_map,
                  ylabel='Total reward',
                  title='(b) Task performance')
+    _overlay_baseline(axes[1], baseline_rewards)
 
-    handles, labels = axes[0].get_legend_handles_labels()
+    handles_a, labels_a = axes[0].get_legend_handles_labels()
+    handles_b, labels_b = axes[1].get_legend_handles_labels()
+    seen = set()
+    handles, labels = [], []
+    for h, l in list(zip(handles_a, labels_a)) + list(zip(handles_b, labels_b)):
+        if l in seen:
+            continue
+        seen.add(l)
+        handles.append(h)
+        labels.append(l)
     fig.legend(handles=handles, labels=labels,
                loc='upper center', bbox_to_anchor=(0.5, 1.04),
-               ncol=len(labels), frameon=False)
+               ncol=len(labels), frameon=False, fontsize='small')
 
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.tight_layout(rect=[0, 0, 1, 0.91])
     out_pdf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'Go1_KRatio_vs_DiscSwitchRatio.pdf')
     fig.savefig(out_pdf)
@@ -137,12 +262,14 @@ def create_plot(agg_switch, agg_reward):
 
 
 def main():
-    print(f'Fetching eval runs from {ENTITY}/{PROJECT} ...')
+    print('Fetching eval runs ...')
     samples = fetch_eval_data()
     if not any(samples.values()):
-        print('No samples found. Check ENTITY/PROJECT and that runs have logged '
+        print('No samples found. Check SOURCES and that runs have logged '
               'Results_{i}_random/disc_switch_ratio and /Total reward keys.')
         return
+
+    baseline_rewards = fetch_baseline_rewards()
 
     agg_switch = aggregate(samples['disc_switch_ratio'])
     agg_reward = aggregate(samples['reward'])
@@ -157,7 +284,7 @@ def main():
             for k, m, s, n in zip(ks, means, sems, counts):
                 print(f'{TARC_NAMES[mtr]:<8} {k:<8.3f} {n:<5d} {m:<10.4f} {s:<10.4f}')
 
-    create_plot(agg_switch, agg_reward)
+    create_plot(agg_switch, agg_reward, baseline_rewards)
 
 
 if __name__ == '__main__':

@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -17,12 +18,13 @@ def process_all_data(agents, tasks, switch_costs):
         path_fn = None
         if agent_name == 'PPO':
             def get_ppo_path(seed):
-                return f'../sim2realResults/PPO/ppo_seed{seed}.csv'
+                return f'../../results/quadruped/sim2realResults/PPO/ppo_seed{seed}.csv'
 
             path_fn = get_ppo_path
         else:
             def get_tacos_path(agent, seed):
-                path = f'../sim2realResults/Tacos/{agent}/seed{seed}/{agent}_seed{seed}.csv'
+                print(agent)
+                path = f'../../results/quadruped/sim2realResults/TARC/{agent}/seed{seed}/{agent}_seed{seed}.csv'
                 return path if os.path.exists(path) else None
 
             path_fn = lambda seed: get_tacos_path(agent_name, seed)
@@ -58,9 +60,11 @@ def process_all_data(agents, tasks, switch_costs):
     return all_data
 
 
-def create_final_results_plot(data, tasks, min_freqs):
+def create_final_results_plot(data, tasks, min_freqs=None, tarc_only=False):
     """
     Generates the final, publication-quality 1x3 plot figure with a professional aspect ratio.
+
+    tarc_only: if True, only show Baseline (PPO) and TARC-4 (labeled "TARC").
     """
     print("--- Generating final results plot... ---")
 
@@ -69,14 +73,22 @@ def create_final_results_plot(data, tasks, min_freqs):
     fig, axes = plt.subplots(1, 3, figsize=(7.16, 2.5))
 
     colors = sns.color_palette('colorblind', n_colors=len(tasks))
-    agents = ['PPO', 'Tacos3', 'Tacos4', 'Tacos5', 'Tacos10']
-    plot_agents = ['Baseline', 'TARC-3', 'TARC-4', 'TARC-5', 'TARC-10']
+    if tarc_only:
+        agents      = ['PPO', 'TARC4']
+        plot_agents = ['Baseline', 'TARC']
+    else:
+        agents      = ['PPO', 'TARC3', 'TARC4', 'TARC5', 'TARC10']
+        plot_agents = ['Baseline', 'TARC-3', 'TARC-4', 'TARC-5', 'TARC-10']
+
+    min_freq_map = {'TARC3': 50/3.0, 'TARC4': 50/4.0, 'TARC5': 50/5.0, 'TARC10': 50/10.0}
+    min_freqs = [min_freq_map.get(a, 50.0) for a in agents]
+
     task_keys = list(tasks.keys())
 
     plot_specs = [
-        {'metric': 'Total Reward (penalized)', 'title': '(a) Penalized Reward'},
-        {'metric': 'Total Reward (unpenalized)', 'title': '(b) Unpenalized Reward'},
-        {'metric': 'Average Control Frequency', 'title': '(c) Avg. Control Frequency'}
+        #{'metric': 'Total Reward (penalized)', 'title': '(a) Penalized Reward'},
+        {'metric': 'Total Task Performance', 'title': '(a) Performance Comparison'},
+        {'metric': 'Average Control Frequency', 'title': '(b) Avg. Control Frequency'}
     ]
 
     for i, spec in enumerate(plot_specs):
@@ -127,8 +139,10 @@ def create_final_results_plot(data, tasks, min_freqs):
 
     fig.tight_layout(rect=[0, 0, 1, 0.95])
 
-    output_filename = 'Go1_Results_plots.pdf'
+    suffix = '_tarc_only' if tarc_only else ''
+    output_filename = f'Go1_Results_plots{suffix}.pdf'
     plt.savefig(output_filename)
+    plt.savefig(output_filename.replace('.pdf', '.png'), dpi=300)
     print(f"--- Final plot saved as: {output_filename} ---")
 
 
@@ -148,7 +162,7 @@ def create_video_plot(data):
     colors = sns.color_palette('colorblind', n_colors=2)
 
     # --- CHANGE: Specify only the agents and task for the video ---
-    agents = ['PPO', 'Tacos4']
+    agents = ['PPO', 'TARC4']
     plot_agents = ['Baseline', 'TARC']
     task_key = 'Run Then Turn'
 
@@ -184,12 +198,29 @@ def create_video_plot(data):
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    agents_to_process = ['PPO', 'Tacos4']
-    tasks_to_process = {
-        'Run Then Turn': 'Fixed Sequence: run_then_turn_20s'
-    }
-    switch_costs_for_agents = {agent: 0.005 for agent in agents_to_process}
-    min_freqs = [50, 50/3.0, 50/4.0, 50/5.0, 50/10.0]
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--tarc_only', action='store_true',
+                        help='Only show Baseline and TARC-4 (labeled TARC) in the final results plot')
+    parser.add_argument('--video', action='store_true',
+                        help='Generate the video 1x2 plot instead of the full results plot')
+    args = parser.parse_args()
 
-    processed_data = process_all_data(agents_to_process, tasks_to_process, switch_costs_for_agents)
-    create_video_plot(processed_data)
+    tasks_to_process = {
+        'Run Then Turn':   'Fixed Sequence: run_then_turn_20s',
+        'Gentle Curve':    'Fixed Sequence: gentle_curve_active_20s',
+        'Velocity Steps':  'Fixed Sequence: velocity_step_changes_active_20s',
+    }
+
+    if args.video:
+        agents_to_process = ['PPO', 'TARC4']
+        switch_costs_for_agents = {agent: 0.005 for agent in agents_to_process}
+        processed_data = process_all_data(agents_to_process, tasks_to_process, switch_costs_for_agents)
+        create_video_plot(processed_data)
+    else:
+        if args.tarc_only:
+            agents_to_process = ['PPO', 'TARC4']
+        else:
+            agents_to_process = ['PPO', 'TARC3', 'TARC4', 'TARC5', 'TARC10']
+        switch_costs_for_agents = {agent: 0.005 for agent in agents_to_process}
+        processed_data = process_all_data(agents_to_process, tasks_to_process, switch_costs_for_agents)
+        create_final_results_plot(processed_data, tasks_to_process, tarc_only=args.tarc_only)
