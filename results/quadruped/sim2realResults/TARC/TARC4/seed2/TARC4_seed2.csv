@@ -1,0 +1,7 @@
+RunID,ModeDetails,Total Reward,Env Steps,Total Action Switches,dof_pos_limits,feet_air_time,feet_height,tracking_lin_vel,tracking_ang_vel,action_rate,orientation,lin_vel_z,termination,ang_vel_xy,stand_still,pose,energy,torques,feet_slip,feet_clearance
+0,Fixed Sequence: gentle_curve_active_20s,26.95,1000,360,0,-15.194,-292.761,932.812,477.112,-1.455,-9.691,-9.008,0,-3.911,-0.311,455.76,-16.192,-8.963,-6.88,-153.816
+1,Fixed Sequence: gentle_curve_active_20s,26.876,1000,361,0,-15.218,-293.188,928.973,476.706,-1.429,-9.742,-11.077,0,-3.392,-0.473,456.161,-15.966,-8.938,-7.741,-150.887
+2,Fixed Sequence: run_then_turn_20s,23.426,1000,375,0,-7.384,-144.785,928.095,442.429,-2.367,-17.051,-41.567,0,-14.694,-242.654,462.6,-27.414,-9.488,-13.317,-173.937
+0,Fixed Sequence: run_then_turn_20s,21.722,1000,376,0,-6.98,-140.895,936.534,444.529,-2.248,-17.369,-35.443,0,-15.457,-327.487,459.712,-26.214,-10.262,-16.277,-170.705
+1,Fixed Sequence: velocity_step_changes_active_20s,25.578,1000,370,0,-12.634,-245.233,931.427,488.489,-1.995,-9.721,-7.519,0,-5.767,-99.069,457.378,-21.611,-9.003,-15.069,-171.176
+2,Fixed Sequence: velocity_step_changes_active_20s,26.073,1000,368,0,-12.23,-238.262,931.78,486.767,-2.029,-8.187,-1.84,0,-6.28,-90.616,455.458,-21.492,-9.165,-13.66,-166.884

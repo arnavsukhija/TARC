@@ -1,0 +1,3 @@
+RunID,ModeDetails,Total Reward,Env Steps,Total Action Switches,dof_pos_limits,feet_air_time,feet_height,tracking_lin_vel,tracking_ang_vel,action_rate,orientation,lin_vel_z,termination,ang_vel_xy,stand_still,pose,energy,torques,feet_slip,feet_clearance
+0,Random Sampling,23.641,1000,1000,0,-19.332,-345.091,910.543,450.806,-1.67,-8.066,-4.928,0,-23.419,-0.626,469.953,-22.386,-8.91,-18.493,-198.034
+1,Random Sampling,24.579,1000,1000,0,-21.682,-385.436,919.107,445.435,-1.291,-4.683,-8.516,0,-15.565,-0.259,478.305,-17.01,-8.512,-14.115,-138.552
