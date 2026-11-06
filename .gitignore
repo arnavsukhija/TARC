@@ -210,3 +210,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- TARC project ---
+.DS_Store
+*.log
+wandb/
+# Generated figures and plot caches (regenerate with the scripts in plotting/)
+plotting/**/*.pdf
+plotting/**/*.png
+plotting/**/*_cache_*.json
+plotting/**/*_data_*.json
