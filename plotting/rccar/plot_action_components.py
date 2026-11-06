@@ -52,7 +52,7 @@ if __name__ == '__main__':
     # --- Configuration ---
     # Update this dictionary with your policy names and corresponding .npy filenames
     files_to_process = {
-        'TARC_Policy': '../../results/rccar/trajectories/v2/origin/Tacos5/trajectory_mpljo50q.npy',
+        'TARC_Policy': '../../results/rccar/trajectories/v2/origin/TARC5/trajectory_mpljo50q.npy',
         'Baseline_Policy': '../../results/rccar/trajectories/v2/origin/PPO/trajectory_72pmrwwo.npy'
     }
 

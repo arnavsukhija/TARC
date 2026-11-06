@@ -216,7 +216,7 @@ ppo_actions_seed2 = action
 
 ## TARC-3 policies
 # seed 0
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos4/trajectory_g9hv0sfq.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC4/trajectory_g9hv0sfq.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = trajectory[:, 0]
@@ -229,7 +229,7 @@ tarc_step_seed0 = step
 tarc_action_seed0 = action
 
 # seed 2
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos4/trajectory_li4evvad.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC4/trajectory_li4evvad.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = trajectory[:, 0]
@@ -241,7 +241,7 @@ step = trajectory[:, 3]
 tarc_step_seed2 = step
 tarc_action_seed2 = action
 
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos4/trajectory_ob7yn33s.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC4/trajectory_ob7yn33s.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = trajectory[:, 0]
@@ -716,7 +716,7 @@ rotated_state = rotate_coordinates(decoded_states, encode_angle=False)
 #std_actions.append(std_action)
 
 ## PPO tacos 2
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos2/trajectory_3ft20fzi.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC2/trajectory_3ft20fzi.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = np.stack(trajectory[:, 0])
@@ -733,7 +733,7 @@ rotated_states = rotate_coordinates(decoded_states, encode_angle=False)
 
 
 ### PPO tacos 3
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos3/trajectory_wzl6uv83.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC3/trajectory_wzl6uv83.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = np.stack(trajectory[:, 0])
@@ -752,7 +752,7 @@ rotated_states = rotate_coordinates(decoded_states, encode_angle=False)
 #std_actions.append(std_action)
 
 ## Tacos 4
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos4/trajectory_g9hv0sfq.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC4/trajectory_g9hv0sfq.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = trajectory[:, 0]
@@ -807,7 +807,7 @@ mean_actions.append(avg_actions)
 std_actions.append(std_action)
 
 # Tacos 10
-file_path = "../../results/rccar/trajectories/v2/origin/Tacos10/trajectory_rirs1len.npy"
+file_path = "../../results/rccar/trajectories/v2/origin/TARC10/trajectory_rirs1len.npy"
 trajectory = np.load(file_path, allow_pickle=True)
 trajectory = correct_all_duplicate_pairs(trajectory)
 state = trajectory[:, 0]
@@ -919,7 +919,7 @@ avg_reward, std_reward, avg_actions, std_action = get_wandb_run_stats('arnavsukh
 ##we use before DR and after D
 
 # --- Configuration ---
-TARC_FILE_PATH = "../../results/rccar/trajectories/v2/origin/TARC/trajectory_xx35nmsz.npy"
+TARC_FILE_PATH = "../../results/rccar/trajectories/v2/origin/TARC5/trajectory_xx35nmsz.npy"
 BASELINE_FILE_PATH = "../../results/rccar/trajectories/v2/origin/PPO/trajectory_72pmrwwo.npy"
 OUTPUT_PLOT_FILENAME = 'rc_car_action_cost.png'
 

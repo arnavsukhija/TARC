@@ -48,9 +48,9 @@ PPO_FILES = [
     'PPO/trajectory_u43ihdue.npy',
 ]
 TARC4_FILES = [
-    'Tacos4/trajectory_g9hv0sfq.npy',
-    'Tacos4/trajectory_li4evvad.npy',
-    'Tacos4/trajectory_ob7yn33s.npy',
+    'TARC4/trajectory_g9hv0sfq.npy',
+    'TARC4/trajectory_li4evvad.npy',
+    'TARC4/trajectory_ob7yn33s.npy',
 ]
 
 
