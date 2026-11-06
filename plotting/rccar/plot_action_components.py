@@ -52,8 +52,8 @@ if __name__ == '__main__':
     # --- Configuration ---
     # Update this dictionary with your policy names and corresponding .npy filenames
     files_to_process = {
-        'TARC_Policy': 'final Trajectories v2/origin/Tacos5/trajectory_mpljo50q.npy',
-        'Baseline_Policy': 'final Trajectories v2/origin/PPO/trajectory_72pmrwwo.npy'
+        'TARC_Policy': '../../results/rccar/trajectories/v2/origin/Tacos5/trajectory_mpljo50q.npy',
+        'Baseline_Policy': '../../results/rccar/trajectories/v2/origin/PPO/trajectory_72pmrwwo.npy'
     }
 
     # Run the function and store the resulting DataFrames
